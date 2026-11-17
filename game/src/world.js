@@ -1,8 +1,11 @@
 // world.js — the city of Solmar and everything that lives in it.
 // Builds the 9x9 street grid, its buildings, traffic, pedestrians, police and the
 // three story missions, and steps the whole simulation forward one frame at a time.
-import { CITY, WORLD, PLAYER, CARS, POLICE, MISSIONS, COLORS, CONTROLS, SAVE_KEY } from './config.js';
-import { makeRng, clamp, dist, angleTo, wrapAngle } from './random.js';
+import { CITY, WORLD, PLAYER, CARS, POLICE, MISSIONS, COLORS, CONTROLS, SAVE_KEY, RANKS } from './config.js';
+import { makeRng, clamp, dist, angleTo, wrapAngle, segDist } from './random.js';
+import { buildLandmarks, landmarkById } from './landmarks.js';
+import { createAmmo, startReload, tickReload, tryFire, spawnGangsters, updateGangsters, updateEnemyBullets, bulletsVsGangsters } from './combat.js';
+import { createSideJobs, startFare, updateFare, checkPaintShop, spawnCashBag, checkCashBags } from './sidejobs.js';
 
 const BLOCK = CITY.block;
 const ROAD = CITY.road;
@@ -132,6 +135,19 @@ export class World {
     this.kills = 0;
     this.carsStolen = 0;
     this.shotsFired = 0;
+    // New systems: the player's gun, the Harbor Boys, side work, the map.
+    this.width = WORLD.width;
+    this.height = WORLD.height;
+    this.ammo = createAmmo();
+    this.gangsters = [];
+    this.enemyBullets = [];
+    this.landmarks = buildLandmarks();
+    this.side = createSideJobs();
+    this.faresDone = 0;
+    this.paintJobs = 0;
+    this.wasted = false;
+    this.storyComplete = false;
+    this.missionTimer = 0;
 
     const cx = roadCenter(4);
     const cy = roadCenter(4);
@@ -154,6 +170,18 @@ export class World {
     this.spawnPickups();
   }
 
+  rankName() {
+    let name = RANKS[0].name;
+    for (const r of RANKS) {
+      if (this.missionIndex >= r.at) name = r.name;
+    }
+    return name;
+  }
+
+  startTaxiFare() {
+    return startFare(this);
+  }
+
   // ---- spawning ------------------------------------------------------------
   spawnParkedCars() {
     const spots = [
@@ -165,6 +193,8 @@ export class World {
       [roadCenter(7), roadCenter(6) - 30, 4],
       [roadCenter(3), roadCenter(2) + 30, 5],
       [roadCenter(4), roadCenter(8) - 30, 6],
+      [roadCenter(6), roadCenter(5) + 30, 8],
+      [roadCenter(2), roadCenter(8) - 30, 9],
     ];
     spots.forEach(([x, y, def], i) => {
       const c = CARS[def];
@@ -218,6 +248,11 @@ export class World {
     }
     this.pickups.push({ x: roadCenter(3), y: roadCenter(6), kind: 'cash', amount: 150, taken: false });
     this.pickups.push({ x: roadCenter(7), y: roadCenter(2), kind: 'cash', amount: 250, taken: false });
+    this.pickups.push({ x: roadCenter(2), y: roadCenter(5), kind: 'ammo', amount: 24, taken: false });
+    this.pickups.push({ x: roadCenter(6), y: roadCenter(8), kind: 'ammo', amount: 24, taken: false });
+    // Dropped cash bags for free-roam pocket money (sidejobs.js owns them).
+    spawnCashBag(this, roadCenter(8), roadCenter(3), 120);
+    spawnCashBag(this, roadCenter(1), roadCenter(5), 200);
   }
 
   // ---- wanted --------------------------------------------------------------
@@ -266,6 +301,22 @@ export class World {
       if (falco) { falco.x = roadCenter(8); falco.y = roadCenter(6) + 30; falco.parked = true; }
       this.missionTarget = { x: roadCenter(8), y: roadCenter(6), label: 'STEAL THE FALCO' };
       this.missionStage = 'steal';
+    } else if (def.id === 'm4') {
+      const motel = landmarkById(this.landmarks, 'motel');
+      this.missionTarget = { x: motel.x, y: motel.y, label: 'THE PALMS MOTEL' };
+      this.missionStage = 'pickup';
+    } else if (def.id === 'm5') {
+      const bank = landmarkById(this.landmarks, 'bank');
+      spawnGangsters(this, bank.x, bank.y, 4, 'vault');
+      this.missionTarget = { x: bank.x, y: bank.y, label: 'NATIONAL BANK VAULT' };
+      this.missionStage = 'clear';
+      this.flash('Four Harbor Boys guard the vault — clear them out');
+    } else if (def.id === 'm6') {
+      const pier = landmarkById(this.landmarks, 'pier');
+      this.missionTarget = { x: pier.x, y: pier.y, label: 'PIER 9 — GETAWAY BOAT' };
+      this.missionStage = 'drive';
+      this.missionTimer = def.timer || 75;
+      this.addHeat(14, 'Detective Kane put the whole SCPD on you');
     } else {
       this.escortVan = {
         x: roadCenter(7), y: roadCenter(7), angle: Math.PI,
@@ -284,8 +335,14 @@ export class World {
     this.missionState = 'done';
     this.mission = null;
     this.escortVan = null;
+    this.gangsters = [];
     this.flash(`MISSION COMPLETE — $${def.reward} earned`);
     this.missionIndex += 1;
+    if (this.onMissionDone) this.onMissionDone();
+    if (this.missionIndex >= MISSIONS.length) {
+      this.storyComplete = true;
+      this.flash('STORY COMPLETE — Solmar is yours. Free roam unlocked.');
+    }
   }
 
   failMission(reason) {
@@ -329,6 +386,43 @@ export class World {
       if (!van) return;
       if (van.health <= 0) { this.failMission('the van was destroyed'); return; }
       if (dist(van.x, van.y, t.x, t.y) < 90) this.completeMission();
+    } else if (this.mission.id === 'm4') {
+      if (this.missionStage === 'pickup') {
+        if (dist(px, py, t.x, t.y) < 80) {
+          this.missionStage = 'deliver';
+          const shop = landmarkById(this.landmarks, 'paint');
+          this.missionTarget = { x: shop.x, y: shop.y, label: 'LOU’S PAINT SHOP' };
+          spawnGangsters(this, t.x, t.y, 2, 'motel');
+          this.addHeat(10, 'Harbor Boys called it in — ambush!');
+          this.flash('Ambush! Two Harbor Boys — then get the package to the paint shop');
+        }
+      } else if (dist(px, py, t.x, t.y) < 80) {
+        this.completeMission();
+      }
+    } else if (this.mission.id === 'm5') {
+      if (this.missionStage === 'clear') {
+        if (this.gangsters.length === 0) {
+          this.missionStage = 'grab';
+          this.flash('Vault clear — grab the cash!');
+        }
+      } else if (this.missionStage === 'grab') {
+        if (dist(px, py, t.x, t.y) < 80) {
+          this.cash += 2000;
+          this.missionStage = 'escape';
+          const pier = landmarkById(this.landmarks, 'pier');
+          this.missionTarget = { x: pier.x, y: pier.y, label: 'PIER 9 — ESCAPE' };
+          this.addHeat(14, 'Vault alarm — 3-star manhunt!');
+          this.flash('Vault cash +$2000 — run for Pier 9!');
+        }
+      } else if (dist(px, py, t.x, t.y) < 90) {
+        this.completeMission();
+      }
+    } else if (this.mission.id === 'm6') {
+      if (this.missionTimer <= 0) {
+        this.failMission('Kane closed the pier — the boat left without you');
+        return;
+      }
+      if (dist(px, py, t.x, t.y) < 90) this.completeMission();
     }
   }
 
@@ -348,15 +442,25 @@ export class World {
       }
     }
     this.updatePlayer(input, dt);
+    tickReload(this.ammo, dt);
     this.updateTraffic(dt);
     this.updatePedestrians(dt);
     this.updatePolice(dt);
+    updateGangsters(this, dt);
+    updateEnemyBullets(this, dt, (x, y, r) => !!circleHitsBuilding(this.buildings, x, y, r));
     this.updateBullets(dt);
     this.updateParticles(dt);
     this.updateEscort(dt);
     this.updateMission(dt);
+    updateFare(this);
+    checkPaintShop(this);
+    checkCashBags(this);
+    if (this.mission && this.mission.id === 'm6' && this.missionState === 'active') {
+      this.missionTimer -= dt;
+    }
+    if (this.side.fareCooldown > 0) this.side.fareCooldown -= dt;
     this.checkPickups();
-    if (this.player.health <= 0) this.respawn();
+    if (this.player.health <= 0 && !this.wasted) this.setWasted();
   }
 
   updatePlayer(input, dt) {
@@ -364,6 +468,12 @@ export class World {
     p.punchCooldown = Math.max(0, p.punchCooldown - dt);
     p.shootCooldown = Math.max(0, p.shootCooldown - dt);
     p.invuln = Math.max(0, p.invuln - dt);
+    if (input.tapped(CONTROLS.reload)) {
+      if (startReload(this.ammo)) this.flash('Reloading…');
+    }
+    if (input.tapped(CONTROLS.taxi)) {
+      if (!this.startTaxiFare() && !this.side.fare) this.flash('No rider nearby — drive past a pedestrian and press T');
+    }
     const mx = input.moveX();
     const my = input.moveY();
     if (p.onFoot) {
@@ -384,6 +494,11 @@ export class World {
       car.speed += throttle * def.accel * dt;
       car.speed -= car.speed * 0.6 * dt;
       if (!throttle) car.speed -= car.speed * 1.4 * dt;
+      // Space is the handbrake: hard stop, with a squeal of dust.
+      if (input.held(CONTROLS.handbrake)) {
+        car.speed -= car.speed * 6 * dt;
+        if (Math.abs(car.speed) > 60) this.kickDust(car);
+      }
       car.speed = clamp(car.speed, -90, def.top);
       const steer = mx * def.grip * (car.speed >= 0 ? 1 : -1) * clamp(Math.abs(car.speed) / 60, 0, 1);
       car.angle += steer * dt * (car.speed >= 0 ? 1 : -1) * 0.9;
@@ -464,6 +579,12 @@ export class World {
 
   shoot(angle) {
     const p = this.player;
+    const result = tryFire(this.ammo);
+    if (result === 'empty') {
+      this.flash('Magazine empty — press R to reload');
+      return;
+    }
+    if (result === 'reloading') return;
     p.shootCooldown = 0.28;
     this.shotsFired += 1;
     const ox = p.x + Math.cos(angle) * 18;
@@ -475,15 +596,22 @@ export class World {
 
   updateBullets(dt) {
     for (const b of this.bullets) {
+      b.px = b.x;
+      b.py = b.y;
+      const ox = b.x;
+      const oy = b.y;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.life -= dt;
-      if (circleHitsBuilding(this.buildings, b.x, b.y, 2)) {
+      // Walls stop a bullet anywhere along the step it took, not just where
+      // it landed: sample the midpoint too so fast rounds cannot skip a wall.
+      if (circleHitsBuilding(this.buildings, b.x, b.y, 2)
+        || circleHitsBuilding(this.buildings, (ox + b.x) / 2, (oy + b.y) / 2, 2)) {
         b.life = 0;
         this.burst(b.x, b.y, '#e8e4d8', 4);
       }
       for (const cop of this.police) {
-        if (dist(b.x, b.y, cop.x, cop.y) < 20) {
+        if (segDist(cop.x, cop.y, ox, oy, b.x, b.y) < 20) {
           b.life = 0;
           this.burst(cop.x, cop.y, '#7fb0ff', 10);
           this.police = this.police.filter((c) => c !== cop);
@@ -492,7 +620,7 @@ export class World {
         }
       }
       for (const ped of this.pedestrians) {
-        if (dist(b.x, b.y, ped.x, ped.y) < 14) {
+        if (segDist(ped.x, ped.y, ox, oy, b.x, b.y) < 14) {
           b.life = 0;
           ped.panic = 4;
           this.burst(ped.x, ped.y, '#ff9d7d', 8);
@@ -500,6 +628,7 @@ export class World {
         }
       }
     }
+    bulletsVsGangsters(this);
     this.bullets = this.bullets.filter((b) => b.life > 0);
   }
 
@@ -602,17 +731,32 @@ export class World {
     this.flash('BUSTED — fined $100, dropped at Civic Plaza');
   }
 
+  setWasted() {
+    this.wasted = true;
+    this.heat = 0;
+    this.wanted = 0;
+    this.police = [];
+    this.gangsters = [];
+    if (this.onWasted) this.onWasted();
+  }
+
   respawn() {
     const p = this.player;
     p.health = PLAYER.maxHealth;
-    p.x = roadCenter(4);
-    p.y = roadCenter(4);
+    const hospital = landmarkById(this.landmarks, 'hospital');
+    p.x = hospital ? hospital.x : roadCenter(4);
+    p.y = hospital ? hospital.y : roadCenter(4);
     p.invuln = 2;
     if (!p.onFoot) { p.car = null; p.onFoot = true; }
     this.heat = 0;
     this.wanted = 0;
     this.police = [];
-    this.flash('You woke up at the clinic — Solmar forgives, once.');
+    this.gangsters = [];
+    this.enemyBullets = [];
+    this.wasted = false;
+    this.ammo.mag = PLAYER.magSize;
+    this.ammo.reserve = Math.max(this.ammo.reserve, 24);
+    this.flash('You woke up at Solmar General — the city forgives, once.');
   }
 
   checkPickups() {
@@ -624,6 +768,9 @@ export class World {
         if (pk.kind === 'health') {
           p.health = Math.min(PLAYER.maxHealth, p.health + 50);
           this.flash('Health +50');
+        } else if (pk.kind === 'ammo') {
+          this.ammo.reserve += pk.amount;
+          this.flash(`Ammo +${pk.amount} rounds`);
         } else {
           this.cash += pk.amount;
           this.flash(`Found $${pk.amount} in a dropped bag`);
@@ -666,6 +813,7 @@ export class World {
     const data = {
       cash: this.cash, missionIndex: this.missionIndex, carsStolen: this.carsStolen,
       kills: this.kills, x: p.x, y: p.y, health: p.health, seed: this.seed,
+      faresDone: this.faresDone, paintJobs: this.paintJobs, storyComplete: this.storyComplete,
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -691,6 +839,9 @@ export class World {
     this.missionIndex = data.missionIndex || 0;
     this.carsStolen = data.carsStolen || 0;
     this.kills = data.kills || 0;
+    this.faresDone = data.faresDone || 0;
+    this.paintJobs = data.paintJobs || 0;
+    this.storyComplete = !!data.storyComplete;
     this.player.x = data.x ?? this.player.x;
     this.player.y = data.y ?? this.player.y;
     this.player.health = data.health ?? PLAYER.maxHealth;

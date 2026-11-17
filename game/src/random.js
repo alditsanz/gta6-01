@@ -51,6 +51,18 @@ export function dist(ax, ay, bx, by) {
   return Math.hypot(bx - ax, by - ay);
 }
 
+// Distance from a point to a segment: bullets move up to ~31 px a frame, so
+// a point check alone lets them tunnel straight past a 14 px target between
+// frames. Checking the segment the bullet travelled this frame closes that.
+export function segDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
 export function angleTo(ax, ay, bx, by) {
   return Math.atan2(by - ay, bx - ax);
 }

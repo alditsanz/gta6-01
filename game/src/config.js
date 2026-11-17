@@ -12,8 +12,13 @@ export const CITY = {
 };
 
 export const WORLD = {
-  width: CITY.blocks * CITY.block + CITY.road,
-  height: CITY.blocks * CITY.block + CITY.road,
+  // The grid has blocks+1 roads of `road` width with `block` blocks between
+  // them: 10 roads * 46 + 9 blocks * 220 = 2440. (It used to read 2026, which
+  // cut the grid short: road 8 sits at x=2151, past the old 2014 clamp, so
+  // the Marina drop-off, the Falco and Pier 9 could never be reached and
+  // missions 1, 2, 5 and 6 could never complete. Now the whole grid is in.)
+  width: (CITY.blocks + 1) * CITY.road + CITY.blocks * CITY.block,
+  height: (CITY.blocks + 1) * CITY.road + CITY.blocks * CITY.block,
 };
 
 export const PLAYER = {
@@ -23,6 +28,9 @@ export const PLAYER = {
   maxHealth: 100,
   punchDamage: 12,
   bulletDamage: 34,
+  magSize: 12,
+  reserveAmmo: 48,
+  reloadSeconds: 1.1,
 };
 
 export const CARS = [
@@ -34,6 +42,9 @@ export const CARS = [
   { name: 'Palma', color: '#2fae7d', top: 250, accel: 470, grip: 3.6, seats: 1 },
   { name: 'Dune', color: '#c98a3f', top: 275, accel: 540, grip: 3.9, seats: 1 },
   { name: 'Falco', color: '#22262e', top: 350, accel: 760, grip: 4.9, seats: 1 },
+  // New in this round: a street taxi for fares, and a work pickup with grip.
+  { name: 'Vento', color: '#f5c542', top: 265, accel: 520, grip: 3.9, seats: 1, taxi: true },
+  { name: 'Rumbo', color: '#8a6f4d', top: 255, accel: 480, grip: 4.4, seats: 1 },
 ];
 
 export const POLICE = {
@@ -70,16 +81,79 @@ export const MISSIONS = [
     objective: 'Escort the van to the Old Port warehouse. Keep it alive.',
     reward: 1500,
   },
+  {
+    id: 'm4',
+    title: 'The Palms Package',
+    giver: 'Mama Lou',
+    brief: 'A package is waiting at The Palms Motel. Pick it up, but the Harbor Boys are watching the motel — expect an ambush and a 2-star tail. Bring the package to Lou’s Paint Shop.',
+    objective: 'Grab the package at the motel, survive the ambush, deliver it to the paint shop.',
+    reward: 1100,
+  },
+  {
+    id: 'm5',
+    title: 'The Solmar Vault',
+    giver: 'Mama Lou',
+    brief: 'The National Bank vault holds the crew’s future. Crack it: clear the Harbor Boys guarding the vault, grab the cash, then shake the 3-star manhunt and reach Pier 9.',
+    objective: 'Clear the vault guards, take the cash, escape to Pier 9.',
+    reward: 2500,
+  },
+  {
+    id: 'm6',
+    title: 'Pier 9 Getaway',
+    giver: 'Lena Voss',
+    brief: 'Detective Kane has the whole SCPD on the streets and the clock is running. Drive to Pier 9 before the timer dies — every star on your tail wants you in a cell, not on a boat.',
+    objective: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
+    reward: 3000,
+    timer: 75,
+  },
+];
+
+// Named places on the Solmar map: the bank, the hospital, the paint shop,
+// the motel, the pier and the docks. Each is a road-grid cell [i, j] plus a
+// label the renderer and the minimap show. (gridIndex helper in landmarks.js)
+export const LANDMARKS = [
+  { id: 'bank', name: 'NATIONAL BANK', kind: 'bank', i: 6, j: 2, note: 'The Solmar Vault — job 5' },
+  { id: 'hospital', name: 'SOLMAR GENERAL', kind: 'hospital', i: 2, j: 7, note: 'You wake up here when WASTED' },
+  { id: 'paint', name: 'LOU’S PAINT SHOP', kind: 'paint', i: 6, j: 5, note: 'New paint, $200 — the heat forgets you' },
+  { id: 'motel', name: 'THE PALMS MOTEL', kind: 'motel', i: 1, j: 6, note: 'The package waits here — job 4' },
+  { id: 'pier', name: 'PIER 9', kind: 'pier', i: 8, j: 1, note: 'The getaway boat — job 6' },
+  { id: 'docks', name: 'THE DOCKS', kind: 'docks', i: 1, j: 8, note: 'The crew’s midnight shipment' },
+  { id: 'plaza', name: 'CIVIC PLAZA', kind: 'plaza', i: 4, j: 4, note: 'Where the busted get dropped' },
 ];
 
 export const STORY = {
   intro: [
     'SOLMAR — a sun-soaked port city where the tide brings money and trouble in equal measure.',
-    'You are RAY DELGADO, a wheelman with a debt to pay and a city to learn.',
-    'Lena Voss runs the quiet jobs. Marco Sol runs the loud ones. The police run everything else.',
+    'You are REX MARLOWE, a wheelman with a debt to pay and a city to learn.',
+    'Mama Lou runs the quiet jobs. Lena Voss runs the loud ones. Detective Kane runs the police.',
     'Steal a car. Earn the crew. Own the night.',
   ],
   outro: 'The van made it. The crew is paid. Solmar is yours — for now.',
+  finale: [
+    'The boat is waiting at Pier 9. Kane’s sirens fade behind you.',
+    'Mama Lou counts the vault cash. Lena guns the engine.',
+    'Six jobs. One city. Rex Marlowe owns the night.',
+  ],
+};
+
+// Rank names the HUD shows as the player’s standing grows.
+export const RANKS = [
+  { at: 0, name: 'WHEELMAN' },
+  { at: 1, name: 'CREW DRIVER' },
+  { at: 3, name: 'SOLMAR FIXER' },
+  { at: 5, name: 'KING OF THE MILE' },
+  { at: 6, name: 'SOLMAR LEGEND' },
+];
+
+export const TAXI = {
+  fareBase: 60,
+  farePerPixel: 0.12,
+  maxFare: 420,
+};
+
+export const PAINT_SHOP = {
+  cost: 200,
+  radius: 70,
 };
 
 export const CONTROLS = {
@@ -94,6 +168,9 @@ export const CONTROLS = {
   sprint: 'ShiftLeft',
   pause: 'KeyP',
   mute: 'KeyM',
+  reload: 'KeyR',
+  handbrake: 'Space',
+  taxi: 'KeyT',
 };
 
 export const COLORS = {

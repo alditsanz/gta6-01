@@ -31,6 +31,9 @@ export class Game {
     }
     this.world.onShoot = () => this.sound.shoot();
     this.world.onPickup = () => this.sound.pickup();
+    this.world.onMissionDone = () => this.sound.missionDone();
+    this.world.onWasted = () => this.sound.busted();
+    this.completeShown = false;
     this.lastTime = performance.now();
     this.autosaveTimer = 0;
     this.resize();
@@ -100,6 +103,17 @@ export class Game {
       if (input.tapped('KeyQ')) this.state = 'start';
       return;
     }
+    if (this.state === 'wasted') {
+      if (input.tapped('Enter') || input.mouse.clicked) {
+        world.respawn();
+        this.state = 'play';
+      }
+      return;
+    }
+    if (this.state === 'complete') {
+      if (input.tapped('Enter') || input.mouse.clicked) this.state = 'play';
+      return;
+    }
     // play
     if (input.tapped('KeyP') || input.tapped('Escape')) {
       this.state = 'pause';
@@ -116,6 +130,15 @@ export class Game {
       if (world.player.shootCooldown <= 0) world.shoot(aim);
     }
     world.update(input, dt);
+    if (world.wasted) {
+      this.state = 'wasted';
+      return;
+    }
+    if (world.storyComplete && !this.completeShown) {
+      this.completeShown = true;
+      this.state = 'complete';
+      return;
+    }
     const car = world.player.car;
     this.sound.engine(car ? car.speed : 0, car ? 350 : 1, !world.player.onFoot);
     this.sound.siren(world.police.length > 0);
@@ -141,6 +164,10 @@ export class Game {
       r.drawMissionBoard(world);
     } else if (this.state === 'pause') {
       r.drawPause(world);
+    } else if (this.state === 'wasted') {
+      r.drawWasted(world);
+    } else if (this.state === 'complete') {
+      r.drawComplete(world);
     } else {
       r.drawHud(world);
     }
