@@ -1,8 +1,8 @@
 // shots.js — deterministic states for the four screenshots, driven by query params.
 //   ?shot=start   — title screen over the city
-//   ?shot=drive   — the player driving the Vento taxi with a fare aboard
-//   ?shot=chase   — a 4-star police chase in the Pier 9 getaway: timer, cops, mission banner
-//   ?shot=mission — the bank vault shootout: Harbor Boys, ammo HUD, wanted stars
+//   ?shot=drive   — the player driving the Vento taxi with a fare aboard, a Solmar coin ahead
+//   ?shot=chase   — a 4-star police chase in the Pier 9 getaway: timer, roadblock, cops, mission banner
+//   ?shot=mission — the ledger heist at SCPD HQ: guards, cops closing in, wanted stars, ammo HUD
 // Every state is built from the same seeded world, so a re-render looks the same.
 import { roadCenter } from './world.js';
 import { CARS } from './config.js';
@@ -43,6 +43,17 @@ export function applyShot(game, shot, seed) {
       pickedUp: true,
     };
     world.faresDone = 2;
+    // A Solmar coin sits on the road just ahead, and a traffic car rides
+    // alongside for a near-miss moment.
+    const coin = world.coins[0];
+    coin.x = car.x + 40;
+    coin.y = car.y + 190;
+    world.coins[1].taken = true;
+    world.cash += 75;
+    const near = world.traffic[0];
+    near.x = car.x + 60;
+    near.y = car.y + 90;
+    near.angle = Math.PI / 2;
     return;
   }
   if (shot === 'chase') {
@@ -60,7 +71,7 @@ export function applyShot(game, shot, seed) {
     player.x = car.x;
     player.y = car.y;
     world.cash = 5400;
-    world.addHeat(16, 'Pier 9 getaway');
+    world.addHeat(4, 'Pier 9 getaway'); // 14 from the mission start + 4 = 18 heat, 4 stars
     world.missionTimer = 68;
     // four cop cars right behind the player for the chase frame
     for (let i = 0; i < 4; i++) {
@@ -68,38 +79,41 @@ export function applyShot(game, shot, seed) {
         id: `shot-cop-${i}`,
         x: car.x - 160 - i * 90,
         y: car.y + (i - 1) * 46,
-        angle: 0, speed: 280,
+        angle: 0, speed: 280, block: false,
         path: [], pathIndex: 0, repath: 0, sirenPhase: i * 2,
       });
     }
+    // and the roadblock waiting ahead on the same street
+    world.spawnRoadblock();
     world.flash('Kane has the whole SCPD on you — Pier 9, 68 seconds!');
     return;
   }
   if (shot === 'mission') {
     game.state = 'play';
-    world.startMission(4);
-    const bank = landmarkById(world.landmarks, 'bank');
+    world.missionIndex = 6;
+    world.startMission(6);
+    const hq = landmarkById(world.landmarks, 'hq');
     player.onFoot = true;
     player.car = null;
-    player.x = bank.x - 90;
-    player.y = bank.y + 40;
+    player.x = hq.x - 120;
+    player.y = hq.y + 60;
     player.angle = 0;
     player.health = 82;
-    world.cash = 3200;
+    world.cash = 7400;
     world.ammo.mag = 9;
     world.ammo.reserve = 36;
-    world.addHeat(12, 'Vault alarm');
-    // two cop cars closing in on the shootout
+    world.addHeat(12, 'Ledger alarm');
+    // two cop cars closing in on the heist
     for (let i = 0; i < 2; i++) {
       world.police.push({
-        id: `shot-cop-m5-${i}`,
-        x: bank.x - 260 - i * 110,
-        y: bank.y - 60 + i * 90,
-        angle: 0, speed: 280,
+        id: `shot-cop-m7-${i}`,
+        x: hq.x - 280 - i * 110,
+        y: hq.y - 80 + i * 100,
+        angle: 0, speed: 280, block: false,
         path: [], pathIndex: 0, repath: 0, sirenPhase: i * 2.5,
       });
     }
-    world.flash('Four Harbor Boys guard the vault — clear them out');
+    world.flash('Three guards on the ledger room — clear them out');
     return;
   }
   game.state = 'start';

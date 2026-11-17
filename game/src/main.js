@@ -1,6 +1,7 @@
-// main.js — the game itself: state machine, frame loop, wiring between the world,
-// the renderer, the sound bank and the player's input. No game logic lives here;
-// it lives in world.js, render.js and audio.js.
+// main.js — the game itself: state machine, frame loop, wiring between the
+// world, the renderer, the sound bank and the player's input. No game logic
+// lives here; it lives in world.js, render.js, combat.js, sidejobs.js and
+// collectibles.js.
 import { World } from './world.js';
 import { Renderer } from './render.js';
 import { Input } from './input.js';
@@ -18,7 +19,7 @@ export class Game {
     this.seed = Number(params.get('seed') || SEED_DEFAULT);
     this.shot = params.get('shot');
     this.world = new World(this.seed);
-    this.state = 'start'; // start | story | board | play | pause
+    this.state = 'start'; // start | story | board | play | pause | wasted | complete
     this.saveExists = false;
     try {
       this.saveExists = !!localStorage.getItem(SAVE_KEY);
@@ -31,6 +32,9 @@ export class Game {
     }
     this.world.onShoot = () => this.sound.shoot();
     this.world.onPickup = () => this.sound.pickup();
+    this.world.onCoin = () => this.sound.coin();
+    this.world.onNearMiss = () => this.sound.nearMiss();
+    this.world.onCrash = () => this.sound.crash();
     this.world.onMissionDone = () => this.sound.missionDone();
     this.world.onWasted = () => this.sound.busted();
     this.completeShown = false;

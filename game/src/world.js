@@ -1,11 +1,13 @@
 // world.js — the city of Solmar and everything that lives in it.
-// Builds the 9x9 street grid, its buildings, traffic, pedestrians, police and the
-// three story missions, and steps the whole simulation forward one frame at a time.
-import { CITY, WORLD, PLAYER, CARS, POLICE, MISSIONS, COLORS, CONTROLS, SAVE_KEY, RANKS } from './config.js';
+// Builds the 9x9 street grid, its buildings, traffic, pedestrians, police,
+// the seven story missions, the Solmar coins and the near-miss payouts, and
+// steps the whole simulation forward one frame at a time.
+import { CITY, WORLD, PLAYER, CARS, POLICE, MISSIONS, COLORS, CONTROLS, SAVE_KEY, RANKS, CAR_DAMAGE, NEAR_MISS } from './config.js';
 import { makeRng, clamp, dist, angleTo, wrapAngle, segDist } from './random.js';
 import { buildLandmarks, landmarkById } from './landmarks.js';
 import { createAmmo, startReload, tickReload, tryFire, spawnGangsters, updateGangsters, updateEnemyBullets, bulletsVsGangsters } from './combat.js';
 import { createSideJobs, startFare, updateFare, checkPaintShop, spawnCashBag, checkCashBags } from './sidejobs.js';
+import { buildCoins, checkCoins, applyCoinSave, takenCoinIndices } from './collectibles.js';
 
 const BLOCK = CITY.block;
 const ROAD = CITY.road;
@@ -28,10 +30,12 @@ export function nearestRoadPoint(x, y) {
   if (gy < ROAD) return { x, y, along: 'y' };
   const dx = gx < PITCH / 2 ? gx : gx - PITCH;
   const dy = gy < PITCH / 2 ? gy : gy - PITCH;
-  return Math.abs(dx) < Math.abs(dy) ? { x: x - dx, y, along: 'x' } : { x, y: y - dy, along: 'y' };
+  if (Math.abs(dx) < Math.abs(dy)) return { x: x - dx, y, along: 'x' };
+  return { x, y: y - dy, along: 'y' };
 }
 
-// Breadth-first search over the road graph: police follow the streets, not walls.
+// Breadth-first search over the road graph: police and the escort van
+// follow the streets, never through walls.
 export function bfsPath(sx, sy, tx, ty) {
   const n = CITY.blocks + 1;
   const key = (i, j) => i * n + j;
@@ -135,7 +139,6 @@ export class World {
     this.kills = 0;
     this.carsStolen = 0;
     this.shotsFired = 0;
-    // New systems: the player's gun, the Harbor Boys, side work, the map.
     this.width = WORLD.width;
     this.height = WORLD.height;
     this.ammo = createAmmo();
@@ -143,8 +146,12 @@ export class World {
     this.enemyBullets = [];
     this.landmarks = buildLandmarks();
     this.side = createSideJobs();
+    this.coins = buildCoins();
     this.faresDone = 0;
     this.paintJobs = 0;
+    this.nearMisses = 0;
+    this.nearMissCooldown = 0;
+    this.roadblockSpawned = false;
     this.wasted = false;
     this.storyComplete = false;
     this.missionTimer = 0;
@@ -178,6 +185,13 @@ export class World {
     return name;
   }
 
+  // The district the player is standing in, from the block grid.
+  districtName() {
+    const bx = clamp(Math.floor((this.player.x - ROAD) / PITCH), 0, CITY.blocks - 1);
+    const by = clamp(Math.floor((this.player.y - ROAD) / PITCH), 0, CITY.blocks - 1);
+    return CITY.districts[(bx + by) % CITY.districts.length];
+  }
+
   startTaxiFare() {
     return startFare(this);
   }
@@ -201,7 +215,7 @@ export class World {
       this.cars.push({
         id: `parked-${i}`, def, name: c.name, color: c.color,
         x, y, angle: this.rng.chance(0.5) ? 0 : Math.PI / 2,
-        speed: 0, parked: true, stolen: false, health: 100,
+        speed: 0, parked: true, stolen: false, health: 100, wrecked: false,
       });
     });
   }
@@ -250,7 +264,6 @@ export class World {
     this.pickups.push({ x: roadCenter(7), y: roadCenter(2), kind: 'cash', amount: 250, taken: false });
     this.pickups.push({ x: roadCenter(2), y: roadCenter(5), kind: 'ammo', amount: 24, taken: false });
     this.pickups.push({ x: roadCenter(6), y: roadCenter(8), kind: 'ammo', amount: 24, taken: false });
-    // Dropped cash bags for free-roam pocket money (sidejobs.js owns them).
     spawnCashBag(this, roadCenter(8), roadCenter(3), 120);
     spawnCashBag(this, roadCenter(1), roadCenter(5), 200);
   }
@@ -260,6 +273,11 @@ export class World {
     this.heat += points;
     const stars = Math.min(POLICE.maxStars, Math.floor(this.heat / 4));
     if (stars > this.wanted) {
+      // Land mid-band (stars*4 + 2) so a single frame of heat decay cannot
+      // drop the brand-new star again: 16 heat is exactly the 4-star line,
+      // and without this the 4-star manhunt in job 7 degraded to 3 stars
+      // on the very next frame.
+      this.heat = Math.max(this.heat, stars * 4 + 2);
       this.wanted = stars;
       this.flash(`${reason} — WANTED LEVEL ${stars}`);
     }
@@ -279,9 +297,41 @@ export class World {
     const near = nearestRoadPoint(x, y);
     this.police.push({
       id: `cop-${this.time.toFixed(0)}-${this.police.length}`,
-      x: near.x, y: near.y, angle: 0, speed: 0,
+      x: near.x, y: near.y, angle: 0, speed: 0, block: false,
       path: [], pathIndex: 0, repath: 0, sirenPhase: this.rng.range(0, 6),
     });
+  }
+
+  // From 4 stars the SCPD parks two cruisers across the road ahead of the
+  // player: a roadblock to drive around or smash through. It stands until
+  // the heat drops below 4 stars.
+  spawnRoadblock() {
+    if (this.roadblockSpawned) return;
+    this.roadblockSpawned = true;
+    const p = this.player;
+    const ahead = nearestRoadPoint(
+      p.x + Math.cos(p.angle) * 260,
+      p.y + Math.sin(p.angle) * 260,
+    );
+    for (let i = 0; i < 2; i++) {
+      const off = i === 0 ? -26 : 26;
+      const x = ahead.along === 'x' ? ahead.x : ahead.x + off;
+      const y = ahead.along === 'x' ? ahead.y + off : ahead.y;
+      this.police.push({
+        id: `block-${i}-${this.time.toFixed(0)}`,
+        x: clamp(x, 30, WORLD.width - 30),
+        y: clamp(y, 30, WORLD.height - 30),
+        angle: p.angle + Math.PI / 2, speed: 0, block: true,
+        path: [], pathIndex: 0, repath: 0, sirenPhase: i * 2,
+      });
+    }
+    this.flash('SCPD ROADBLOCK AHEAD — go around or through!');
+  }
+
+  clearRoadblock() {
+    if (!this.roadblockSpawned) return;
+    this.roadblockSpawned = false;
+    this.police = this.police.filter((c) => !c.block);
   }
 
   // ---- missions ------------------------------------------------------------
@@ -317,6 +367,12 @@ export class World {
       this.missionStage = 'drive';
       this.missionTimer = def.timer || 75;
       this.addHeat(14, 'Detective Kane put the whole SCPD on you');
+    } else if (def.id === 'm7') {
+      const hq = landmarkById(this.landmarks, 'hq');
+      spawnGangsters(this, hq.x, hq.y, 3, 'hq');
+      this.missionTarget = { x: hq.x, y: hq.y, label: 'SCPD HEADQUARTERS' };
+      this.missionStage = 'clear';
+      this.flash('Three guards on the ledger room — clear them out');
     } else {
       this.escortVan = {
         x: roadCenter(7), y: roadCenter(7), angle: Math.PI,
@@ -336,6 +392,7 @@ export class World {
     this.mission = null;
     this.escortVan = null;
     this.gangsters = [];
+    this.clearRoadblock();
     this.flash(`MISSION COMPLETE — $${def.reward} earned`);
     this.missionIndex += 1;
     if (this.onMissionDone) this.onMissionDone();
@@ -349,6 +406,7 @@ export class World {
     this.missionState = 'failed';
     this.mission = null;
     this.escortVan = null;
+    this.clearRoadblock();
     this.flash(`MISSION FAILED — ${reason}`);
   }
 
@@ -423,6 +481,28 @@ export class World {
         return;
       }
       if (dist(px, py, t.x, t.y) < 90) this.completeMission();
+    } else if (this.mission.id === 'm7') {
+      if (this.missionStage === 'clear') {
+        if (this.gangsters.length === 0) {
+          this.missionStage = 'grab';
+          this.flash('Ledger room clear — grab the ledger!');
+        }
+      } else if (this.missionStage === 'grab') {
+        if (dist(px, py, t.x, t.y) < 80) {
+          this.missionStage = 'escape';
+          const marina = { x: roadCenter(8), y: roadCenter(1) };
+          this.missionTarget = { x: marina.x, y: marina.y, label: 'MARINA — BURN THE LEDGER' };
+          this.missionTimer = this.mission.timer || 90;
+          this.addHeat(16, 'Kane saw the ledger walk out — 4-star manhunt!');
+          this.flash('Ledger in hand — 90 seconds to the Marina!');
+        }
+      } else if (this.missionStage === 'escape') {
+        if (this.missionTimer <= 0) {
+          this.failMission('Kane’s roadblocks closed the Marina — the ledger is evidence now');
+          return;
+        }
+        if (dist(px, py, t.x, t.y) < 90) this.completeMission();
+      }
     }
   }
 
@@ -431,6 +511,7 @@ export class World {
     this.time += dt;
     this.timeOfDay = 0.42 + Math.sin(this.time * 0.00004) * 0.05;
     if (this.messageTimer > 0) this.messageTimer -= dt;
+    if (this.nearMissCooldown > 0) this.nearMissCooldown -= dt;
     if (this.wanted > 0) {
       this.heat = Math.max(0, this.heat - POLICE.decayPerSecond * dt);
       const stars = Math.min(POLICE.maxStars, Math.floor(this.heat / 4));
@@ -440,6 +521,10 @@ export class World {
         this.spawnPolice();
         this.policeTimer = POLICE.spawnGap;
       }
+      if (this.wanted >= POLICE.roadblockAtStars) this.spawnRoadblock();
+      else this.clearRoadblock();
+    } else {
+      this.clearRoadblock();
     }
     this.updatePlayer(input, dt);
     tickReload(this.ammo, dt);
@@ -455,7 +540,11 @@ export class World {
     updateFare(this);
     checkPaintShop(this);
     checkCashBags(this);
+    checkCoins(this);
     if (this.mission && this.mission.id === 'm6' && this.missionState === 'active') {
+      this.missionTimer -= dt;
+    }
+    if (this.mission && this.mission.id === 'm7' && this.missionState === 'active' && this.missionStage === 'escape') {
       this.missionTimer -= dt;
     }
     if (this.side.fareCooldown > 0) this.side.fareCooldown -= dt;
@@ -479,14 +568,14 @@ export class World {
     if (p.onFoot) {
       const speed = input.sprinting() ? PLAYER.runSpeed : PLAYER.walkSpeed;
       const len = Math.hypot(mx, my) || 1;
-      const nx = p.x + (mx / len) * speed * dt * (mx || my ? 1 : 0);
-      const ny = p.y + (my / len) * speed * dt * (mx || my ? 1 : 0);
-      if (mx || my) p.angle = Math.atan2(my, mx);
+      const moving = mx !== 0 || my !== 0;
+      const nx = p.x + (mx / len) * speed * dt * (moving ? 1 : 0);
+      const ny = p.y + (my / len) * speed * dt * (moving ? 1 : 0);
+      if (moving) p.angle = Math.atan2(my, mx);
       if (!circleHitsBuilding(this.buildings, nx, p.y, PLAYER.radius)) p.x = clamp(nx, 12, WORLD.width - 12);
       if (!circleHitsBuilding(this.buildings, p.x, ny, PLAYER.radius)) p.y = clamp(ny, 12, WORLD.height - 12);
       if (input.tapped(CONTROLS.enterCar)) this.tryEnterCar();
       if (input.tapped(CONTROLS.punch)) this.punch();
-      // on-foot aiming is driven by main.js (mouse world position -> angle)
     } else {
       const car = p.car;
       const def = CARS[car.def];
@@ -507,7 +596,10 @@ export class World {
       const hit = circleHitsBuilding(this.buildings, nx, ny, 16);
       if (hit) {
         car.speed *= -0.25;
+        car.health -= CAR_DAMAGE.wallHit;
         this.burst(car.x, car.y, '#e8e4d8', 8);
+        if (this.onCrash) this.onCrash();
+        if (car.health <= CAR_DAMAGE.wreckAt) this.wreckCar(car);
       } else {
         car.x = clamp(nx, 14, WORLD.width - 14);
         car.y = clamp(ny, 14, WORLD.height - 14);
@@ -516,9 +608,35 @@ export class World {
       p.y = car.y;
       p.angle = car.angle;
       if (Math.abs(car.speed) > 120) this.kickDust(car);
+      this.checkNearMiss(car);
       if (input.tapped(CONTROLS.exitCar)) this.exitCar();
       if (input.mouse.down && p.shootCooldown <= 0) this.shoot(p.angle); // drive-by, straight ahead
     }
+  }
+
+  // Threading past traffic at speed pays $15 a time. It rewards the
+  // driving the game is about, and it only pays while actually moving fast.
+  checkNearMiss(car) {
+    if (this.nearMissCooldown > 0) return;
+    if (Math.abs(car.speed) < NEAR_MISS.minSpeed) return;
+    for (const other of this.traffic) {
+      if (dist(car.x, car.y, other.x, other.y) < NEAR_MISS.range) {
+        this.nearMissCooldown = NEAR_MISS.cooldown;
+        this.nearMisses += 1;
+        this.cash += NEAR_MISS.pay;
+        this.flash(`NEAR MISS +$${NEAR_MISS.pay} — clean driving, Rex`);
+        if (this.onNearMiss) this.onNearMiss();
+        return;
+      }
+    }
+  }
+
+  wreckCar(car) {
+    car.wrecked = true;
+    car.speed = 0;
+    this.burst(car.x, car.y, '#ff8c3a', 16);
+    this.flash('CAR TOTALED — find another ride, and mind the walls');
+    if (this.player.car === car) this.exitCar();
   }
 
   tryEnterCar() {
@@ -526,6 +644,7 @@ export class World {
     let best = null;
     let bestD = 60;
     for (const car of [...this.cars, ...this.traffic]) {
+      if (car.wrecked) continue;
       const d = dist(p.x, p.y, car.x, car.y);
       if (d < bestD) { best = car; bestD = d; }
     }
@@ -548,6 +667,7 @@ export class World {
   exitCar() {
     const p = this.player;
     const car = p.car;
+    if (!car) { p.onFoot = true; return; }
     car.speed = 0;
     p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 26;
     p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 26;
@@ -678,6 +798,9 @@ export class World {
     const p = this.player;
     for (const cop of this.police) {
       cop.sirenPhase += dt * 4;
+      // A roadblock cruiser stays parked across the road; it still busts
+      // anyone who drives straight into it.
+      if (cop.block) continue;
       cop.repath -= dt;
       if (cop.repath <= 0) {
         cop.path = bfsPath(cop.x, cop.y, p.x, p.y);
@@ -696,6 +819,14 @@ export class World {
         if (this.wanted >= 3 || this.rng.chance(dt * 0.5)) {
           this.busted();
         }
+      }
+    }
+    // Roadblock cops bust on contact too — checked outside the chase loop
+    // because the loop above skips parked cruisers.
+    for (const cop of this.police) {
+      if (!cop.block) continue;
+      if (dist(cop.x, cop.y, p.x, p.y) < POLICE.bustRadius && p.invuln <= 0) {
+        this.busted();
       }
     }
   }
@@ -724,6 +855,7 @@ export class World {
     this.heat = 0;
     this.wanted = 0;
     this.police = [];
+    this.roadblockSpawned = false;
     p.invuln = 3;
     if (!p.onFoot) this.exitCar();
     p.x = roadCenter(4);
@@ -736,6 +868,7 @@ export class World {
     this.heat = 0;
     this.wanted = 0;
     this.police = [];
+    this.roadblockSpawned = false;
     this.gangsters = [];
     if (this.onWasted) this.onWasted();
   }
@@ -751,6 +884,7 @@ export class World {
     this.heat = 0;
     this.wanted = 0;
     this.police = [];
+    this.roadblockSpawned = false;
     this.gangsters = [];
     this.enemyBullets = [];
     this.wasted = false;
@@ -814,6 +948,7 @@ export class World {
       cash: this.cash, missionIndex: this.missionIndex, carsStolen: this.carsStolen,
       kills: this.kills, x: p.x, y: p.y, health: p.health, seed: this.seed,
       faresDone: this.faresDone, paintJobs: this.paintJobs, storyComplete: this.storyComplete,
+      nearMisses: this.nearMisses, coinsTaken: takenCoinIndices(this.coins),
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -842,6 +977,8 @@ export class World {
     this.faresDone = data.faresDone || 0;
     this.paintJobs = data.paintJobs || 0;
     this.storyComplete = !!data.storyComplete;
+    this.nearMisses = data.nearMisses || 0;
+    applyCoinSave(this.coins, data.coinsTaken);
     this.player.x = data.x ?? this.player.x;
     this.player.y = data.y ?? this.player.y;
     this.player.health = data.health ?? PLAYER.maxHealth;

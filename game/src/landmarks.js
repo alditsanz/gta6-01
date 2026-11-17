@@ -1,7 +1,8 @@
 // landmarks.js — the named places of Solmar: bank, hospital, paint shop,
-// motel, pier, docks and plaza. One job: turn the LANDMARKS table in
-// config.js into world coordinates and answer "what is near here?".
-// The renderer draws their labels and the minimap draws their icons.
+// motel, pier, docks, plaza and the SCPD headquarters. One job: turn the
+// LANDMARKS table in config.js into world coordinates and answer
+// "what is near here?". The renderer draws their labels; the minimap draws
+// their glyphs.
 import { LANDMARKS } from './config.js';
 import { roadCenter } from './world.js';
 import { dist } from './random.js';
@@ -18,7 +19,10 @@ export function buildLandmarks() {
 }
 
 export function landmarkById(landmarks, id) {
-  return landmarks.find((l) => l.id === id) || null;
+  for (const l of landmarks) {
+    if (l.id === id) return l;
+  }
+  return null;
 }
 
 export function landmarkNear(landmarks, x, y, radius) {
@@ -34,13 +38,16 @@ export function landmarkNear(landmarks, x, y, radius) {
   return best;
 }
 
-// The on-screen label for a landmark kind, drawn on the minimap.
+// The single letter a landmark gets on the minimap and in the world.
 export function landmarkGlyph(kind) {
-  if (kind === 'hospital') return '+';
-  if (kind === 'bank') return '$';
-  if (kind === 'paint') return 'P';
-  if (kind === 'pier') return '9';
-  if (kind === 'motel') return 'M';
-  if (kind === 'docks') return 'D';
-  return '•';
+  switch (kind) {
+    case 'hospital': return '+';
+    case 'bank': return '$';
+    case 'paint': return 'P';
+    case 'pier': return '9';
+    case 'motel': return 'M';
+    case 'docks': return 'D';
+    case 'hq': return 'H';
+    default: return '•';
+  }
 }

@@ -1,9 +1,9 @@
-// config.js — every tunable number and named thing in Solmar Heat.
-// One place to balance the city, the cars, the police and the story.
+// config.js — every number, name and story beat in Solmar Heat, in one place.
+// Balance the city, the cars, the police and the seven jobs from here.
 export const CITY = {
-  blocks: 9, // 9 x 9 blocks of streets
-  block: 220, // pixels per block edge
-  road: 46, // road width
+  blocks: 9, // a 9 x 9 grid of blocks, ringed by streets
+  block: 220, // pixels along one block edge
+  road: 46, // street width
   name: 'SOLMAR',
   districts: [
     'Marina', 'Old Port', 'Palm Row', 'Civic Plaza', 'Harborlight',
@@ -12,11 +12,10 @@ export const CITY = {
 };
 
 export const WORLD = {
-  // The grid has blocks+1 roads of `road` width with `block` blocks between
-  // them: 10 roads * 46 + 9 blocks * 220 = 2440. (It used to read 2026, which
-  // cut the grid short: road 8 sits at x=2151, past the old 2014 clamp, so
-  // the Marina drop-off, the Falco and Pier 9 could never be reached and
-  // missions 1, 2, 5 and 6 could never complete. Now the whole grid is in.)
+  // Streets sit every `block + road` pixels: 10 roads of 46 px and 9 blocks
+  // of 220 px add up to 2440 px a side, so the farthest road (index 9, centre
+  // 2417) is inside the world. A smaller world cut the grid short and left
+  // the Marina, the Falco and Pier 9 unreachable — missions died there.
   width: (CITY.blocks + 1) * CITY.road + CITY.blocks * CITY.block,
   height: (CITY.blocks + 1) * CITY.road + CITY.blocks * CITY.block,
 };
@@ -34,26 +33,48 @@ export const PLAYER = {
 };
 
 export const CARS = [
-  { name: 'Sunny', color: '#e8b93c', top: 235, accel: 430, grip: 3.4, seats: 1 },
-  { name: 'Corto', color: '#3f7fd0', top: 260, accel: 500, grip: 3.8, seats: 1 },
-  { name: 'Vela', color: '#c94f6d', top: 285, accel: 560, grip: 4.0, seats: 1 },
-  { name: 'Bruma', color: '#7a5fb0', top: 300, accel: 620, grip: 4.3, seats: 1 },
-  { name: 'Toro GT', color: '#d84a2f', top: 330, accel: 700, grip: 4.6, seats: 1 },
-  { name: 'Palma', color: '#2fae7d', top: 250, accel: 470, grip: 3.6, seats: 1 },
-  { name: 'Dune', color: '#c98a3f', top: 275, accel: 540, grip: 3.9, seats: 1 },
-  { name: 'Falco', color: '#22262e', top: 350, accel: 760, grip: 4.9, seats: 1 },
-  // New in this round: a street taxi for fares, and a work pickup with grip.
-  { name: 'Vento', color: '#f5c542', top: 265, accel: 520, grip: 3.9, seats: 1, taxi: true },
-  { name: 'Rumbo', color: '#8a6f4d', top: 255, accel: 480, grip: 4.4, seats: 1 },
+  { name: 'Sunny', color: '#e8b93c', top: 235, accel: 430, grip: 3.4 },
+  { name: 'Corto', color: '#3f7fd0', top: 260, accel: 500, grip: 3.8 },
+  { name: 'Vela', color: '#c94f6d', top: 285, accel: 560, grip: 4.0 },
+  { name: 'Bruma', color: '#7a5fb0', top: 300, accel: 620, grip: 4.3 },
+  { name: 'Toro GT', color: '#d84a2f', top: 330, accel: 700, grip: 4.6 },
+  { name: 'Palma', color: '#2fae7d', top: 250, accel: 470, grip: 3.6 },
+  { name: 'Dune', color: '#c98a3f', top: 275, accel: 540, grip: 3.9 },
+  { name: 'Falco', color: '#22262e', top: 350, accel: 760, grip: 4.9 },
+  { name: 'Vento', color: '#f5c542', top: 265, accel: 520, grip: 3.9, taxi: true },
+  { name: 'Rumbo', color: '#8a6f4d', top: 255, accel: 480, grip: 4.4 },
 ];
 
 export const POLICE = {
   maxStars: 5,
   chaseSpeed: 300,
   spawnGap: 3.2,
-  starHeat: [0, 1, 2, 4, 7, 11], // heat points per star
+  starHeat: [0, 1, 2, 4, 7, 11], // heat points that buy each star
   decayPerSecond: 0.6,
   bustRadius: 26,
+  roadblockAtStars: 4, // from 4 stars the SCPD parks a roadblock ahead of you
+};
+
+export const CAR_DAMAGE = {
+  wallHit: 8, // health lost by slamming a building
+  wreckAt: 0, // at 0 the car is totaled and cannot be driven again
+};
+
+export const NEAR_MISS = {
+  pay: 15, // cash for threading past traffic at speed
+  minSpeed: 150,
+  range: 42, // how close the other car must be
+  cooldown: 1.5, // seconds between payouts
+};
+
+export const COINS = {
+  pay: 75, // cash per Solmar coin found
+  total: 10,
+  // Fixed road-grid cells, so the set is the same every run and in saves.
+  spots: [
+    [0, 3], [1, 5], [2, 8], [3, 1], [4, 6],
+    [5, 0], [6, 8], [7, 2], [8, 5], [9, 9],
+  ],
 };
 
 export const MISSIONS = [
@@ -106,11 +127,19 @@ export const MISSIONS = [
     reward: 3000,
     timer: 75,
   },
+  {
+    id: 'm7',
+    title: 'The Last Ledger',
+    giver: 'Mama Lou',
+    brief: 'Kane kept a ledger of everything the crew ever did — names, dates, plates. It sits in the SCPD headquarters under guard. Take it back: clear the guards, grab the ledger, then outrun a 4-star manhunt to the Marina before the timer dies.',
+    objective: 'Clear the HQ guards, take the ledger, escape to the Marina in 90 seconds.',
+    reward: 4000,
+    timer: 90,
+  },
 ];
 
-// Named places on the Solmar map: the bank, the hospital, the paint shop,
-// the motel, the pier and the docks. Each is a road-grid cell [i, j] plus a
-// label the renderer and the minimap show. (gridIndex helper in landmarks.js)
+// Named places on the Solmar map. Each is a road-grid cell [i, j]; the
+// renderer draws its label and the minimap draws its glyph.
 export const LANDMARKS = [
   { id: 'bank', name: 'NATIONAL BANK', kind: 'bank', i: 6, j: 2, note: 'The Solmar Vault — job 5' },
   { id: 'hospital', name: 'SOLMAR GENERAL', kind: 'hospital', i: 2, j: 7, note: 'You wake up here when WASTED' },
@@ -119,6 +148,7 @@ export const LANDMARKS = [
   { id: 'pier', name: 'PIER 9', kind: 'pier', i: 8, j: 1, note: 'The getaway boat — job 6' },
   { id: 'docks', name: 'THE DOCKS', kind: 'docks', i: 1, j: 8, note: 'The crew’s midnight shipment' },
   { id: 'plaza', name: 'CIVIC PLAZA', kind: 'plaza', i: 4, j: 4, note: 'Where the busted get dropped' },
+  { id: 'hq', name: 'SCPD HEADQUARTERS', kind: 'hq', i: 7, j: 3, note: 'Kane’s ledger — job 7' },
 ];
 
 export const STORY = {
@@ -130,19 +160,20 @@ export const STORY = {
   ],
   outro: 'The van made it. The crew is paid. Solmar is yours — for now.',
   finale: [
-    'The boat is waiting at Pier 9. Kane’s sirens fade behind you.',
+    'The ledger burns on the boat at Pier 9. Kane has nothing left on the crew.',
     'Mama Lou counts the vault cash. Lena guns the engine.',
-    'Six jobs. One city. Rex Marlowe owns the night.',
+    'Seven jobs. One city. Rex Marlowe owns the night.',
   ],
 };
 
-// Rank names the HUD shows as the player’s standing grows.
+// Rank names the HUD shows as the player’s standing grows with jobs done.
 export const RANKS = [
   { at: 0, name: 'WHEELMAN' },
   { at: 1, name: 'CREW DRIVER' },
   { at: 3, name: 'SOLMAR FIXER' },
   { at: 5, name: 'KING OF THE MILE' },
-  { at: 6, name: 'SOLMAR LEGEND' },
+  { at: 6, name: 'STREET ROYALTY' },
+  { at: 7, name: 'SOLMAR LEGEND' },
 ];
 
 export const TAXI = {

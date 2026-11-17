@@ -1,17 +1,19 @@
 // combat.js — shooting with a real magazine, and the Harbor Boys:
-// gangsters who strafe, take cover in doorways and shoot back.
+// gangsters who strafe, keep their distance and shoot back.
 // One job: everything about a gunfight that is not the city itself.
 // The world owns the arrays (world.gangsters, world.bullets); this file
 // spawns the gangsters, steps their AI and resolves their bullets.
 import { PLAYER } from './config.js';
-import { dist, angleTo, wrapAngle, clamp, segDist } from './random.js';
+import { dist, angleTo, clamp, segDist } from './random.js';
 
 export function createAmmo() {
   return { mag: PLAYER.magSize, reserve: PLAYER.reserveAmmo, reloading: 0 };
 }
 
 export function startReload(ammo) {
-  if (ammo.reloading > 0 || ammo.mag >= PLAYER.magSize || ammo.reserve <= 0) return false;
+  if (ammo.reloading > 0) return false;
+  if (ammo.mag >= PLAYER.magSize) return false;
+  if (ammo.reserve <= 0) return false;
   ammo.reloading = PLAYER.reloadSeconds;
   return true;
 }
@@ -19,13 +21,12 @@ export function startReload(ammo) {
 export function tickReload(ammo, dt) {
   if (ammo.reloading <= 0) return;
   ammo.reloading -= dt;
-  if (ammo.reloading <= 0) {
-    ammo.reloading = 0;
-    const need = PLAYER.magSize - ammo.mag;
-    const take = Math.min(need, ammo.reserve);
-    ammo.mag += take;
-    ammo.reserve -= take;
-  }
+  if (ammo.reloading > 0) return;
+  ammo.reloading = 0;
+  const need = PLAYER.magSize - ammo.mag;
+  const take = Math.min(need, ammo.reserve);
+  ammo.mag += take;
+  ammo.reserve -= take;
 }
 
 // Fire one round if the magazine allows it. Returns 'shot', 'empty' or 'reloading'.
@@ -61,8 +62,8 @@ export function gangsterCount(world) {
   return world.gangsters.length;
 }
 
-// One frame of gangster AI: strafe sideways, keep distance, shoot at the
-// player when the line is clear and the cooldown has run out.
+// One frame of gangster AI: strafe sideways, close in when far, back off
+// when too close, and shoot at the player when the cooldown has run out.
 export function updateGangsters(world, dt) {
   const p = world.player;
   for (const g of world.gangsters) {
@@ -76,7 +77,6 @@ export function updateGangsters(world, dt) {
     const d = dist(g.x, g.y, p.x, p.y);
     const toPlayer = angleTo(g.x, g.y, p.x, p.y);
     g.angle = toPlayer;
-    // Strafe sideways, drift in when far, back off when too close.
     const strafe = toPlayer + (Math.PI / 2) * g.strafeDir;
     let mx = Math.cos(strafe) * 55;
     let my = Math.sin(strafe) * 55;
@@ -105,7 +105,7 @@ export function updateGangsters(world, dt) {
   }
 }
 
-// Enemy bullets: they hurt the player (or the escort van) and die on walls.
+// Enemy bullets hurt the player (or the escort van) and die on walls.
 export function updateEnemyBullets(world, dt, hitBuilding) {
   const p = world.player;
   for (const b of world.enemyBullets) {
@@ -136,16 +136,17 @@ export function updateEnemyBullets(world, dt, hitBuilding) {
   world.enemyBullets = world.enemyBullets.filter((b) => b.life > 0);
 }
 
-// Player bullets vs gangsters. Bullets are stepped in world.updateBullets,
-// which stashes each round's previous position (b.px, b.py) before moving
-// it, so the hit test covers the whole segment the round travelled.
+// Player bullets vs gangsters. world.updateBullets stashes each round's
+// previous position (b.px, b.py) before moving it, so the hit test covers
+// the whole segment the round travelled this frame.
 export function bulletsVsGangsters(world) {
   let down = 0;
   for (const b of world.bullets) {
     const ox = b.px ?? b.x;
     const oy = b.py ?? b.y;
     for (const g of world.gangsters) {
-      if (b.life > 0 && segDist(g.x, g.y, ox, oy, b.x, b.y) < 16) {
+      if (b.life <= 0) continue;
+      if (segDist(g.x, g.y, ox, oy, b.x, b.y) < 16) {
         b.life = 0;
         g.health -= PLAYER.bulletDamage;
         world.burst(g.x, g.y, '#ff9d7d', 8);

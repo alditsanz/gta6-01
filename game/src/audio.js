@@ -87,6 +87,16 @@ export class SoundBank {
     setTimeout(() => this.blip(990, 0.14, 'sine', 0.2), 90);
   }
 
+  coin() {
+    this.blip(1319, 0.1, 'sine', 0.2);
+    setTimeout(() => this.blip(1760, 0.18, 'sine', 0.2), 80);
+  }
+
+  nearMiss() {
+    this.noiseBurst(0.18, 0.18, 5200);
+    this.blip(320, 0.16, 'sine', 0.1, 720);
+  }
+
   missionStart() {
     [523, 659, 784].forEach((f, i) => setTimeout(() => this.blip(f, 0.22, 'triangle', 0.22), i * 110));
   }

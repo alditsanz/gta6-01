@@ -1,6 +1,9 @@
-// input.js — keyboard and mouse state, plus the on-screen touch of the bindings.
-// The game reads this, never the raw events, so play-tests can drive it too.
+// input.js — keyboard and mouse state, and a scripted stand-in for tests.
+// The game reads this object and never the raw events, so a headless
+// play-test can drive the same code the browser drives.
 import { CONTROLS } from './config.js';
+
+const PREVENTED = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
 
 export class Input {
   constructor(canvas) {
@@ -12,7 +15,7 @@ export class Input {
       if (e.repeat) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+      if (PREVENTED.includes(e.code)) e.preventDefault();
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
     this._onMouseMove = (e) => {
@@ -49,9 +52,7 @@ export class Input {
   }
 
   axis(codes) {
-    let v = 0;
-    if (codes.some((c) => this.keys.has(c))) v += 1;
-    return v;
+    return codes.some((c) => this.keys.has(c)) ? 1 : 0;
   }
 
   moveX() {
@@ -66,7 +67,7 @@ export class Input {
     return this.keys.has(CONTROLS.sprint) || this.keys.has('ShiftRight');
   }
 
-  // Call once per frame after the game has read the input.
+  // Call once per frame, after the game has read the input.
   endFrame() {
     this.pressed.clear();
     this.mouse.clicked = false;
@@ -82,7 +83,7 @@ export class Input {
   }
 }
 
-// A scripted stand-in for headless play-tests: feed it key/mouse states directly.
+// Scripted input for headless tests: press and release keys by hand.
 export class ScriptedInput {
   constructor() {
     this.keys = new Set();

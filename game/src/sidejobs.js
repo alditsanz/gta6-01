@@ -1,7 +1,8 @@
 // sidejobs.js — the work between story missions: taxi fares, the paint
 // shop and dropped cash. One job: small paid activities that keep the
 // free-roam city worth driving, with their own state and payouts.
-// The world owns the state (world.fare, world.cashBags); this file steps it.
+// The world owns the state (world.side.fare, world.side.bags); this file
+// steps it.
 import { TAXI, PAINT_SHOP } from './config.js';
 import { dist } from './random.js';
 import { landmarkById } from './landmarks.js';
@@ -60,14 +61,21 @@ export function updateFare(world) {
   }
 }
 
-// Driving through Lou's Paint Shop with cash in hand buys a new identity:
-// the wanted level clears. The shop only works while driving.
+// Driving through Lou's Paint Shop buys a new identity: the wanted level
+// clears (for $200, when there is heat to clear) and a battered car comes
+// out repaired. The shop only works while driving.
 export function checkPaintShop(world) {
   const p = world.player;
-  if (p.onFoot || world.wanted === 0) return;
+  if (p.onFoot) return;
   const shop = landmarkById(world.landmarks, 'paint');
   if (!shop) return;
-  if (dist(p.x, p.y, shop.x, shop.y) < PAINT_SHOP.radius && world.cash >= PAINT_SHOP.cost) {
+  if (dist(p.x, p.y, shop.x, shop.y) >= PAINT_SHOP.radius) return;
+  const car = p.car;
+  if (car && car.health < 100) {
+    car.health = 100;
+    world.flash('Paint shop — car repaired, good as new');
+  }
+  if (world.wanted > 0 && world.cash >= PAINT_SHOP.cost) {
     world.cash -= PAINT_SHOP.cost;
     world.heat = 0;
     world.wanted = 0;
@@ -80,8 +88,9 @@ export function checkPaintShop(world) {
 // Dropped cash bags respawn around the city so free roam always pays a
 // little: walk or drive over one to pocket it.
 export function spawnCashBag(world, x, y, amount) {
-  world.side.bags.push({ x, y, amount, taken: false });
-  return world.side.bags[world.side.bags.length - 1];
+  const bag = { x, y, amount, taken: false };
+  world.side.bags.push(bag);
+  return bag;
 }
 
 export function checkCashBags(world) {

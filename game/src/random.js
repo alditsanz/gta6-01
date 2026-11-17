@@ -1,5 +1,6 @@
-// random.js — small deterministic random helpers so the city, the traffic and the
-// screenshot states all come out the same way from the same seed.
+// random.js — deterministic random helpers and geometry.
+// One seed drives the city, the traffic and the screenshot states, so the
+// same seed always builds the same Solmar.
 export function hashSeed(text) {
   let h = 2166136261 >>> 0;
   for (let i = 0; i < text.length; i++) {
@@ -40,7 +41,9 @@ export function makeRng(seed) {
 }
 
 export function clamp(value, min, max) {
-  return value < min ? min : value > max ? max : value;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
 }
 
 export function lerp(a, b, t) {
@@ -51,15 +54,16 @@ export function dist(ax, ay, bx, by) {
   return Math.hypot(bx - ax, by - ay);
 }
 
-// Distance from a point to a segment: bullets move up to ~31 px a frame, so
-// a point check alone lets them tunnel straight past a 14 px target between
-// frames. Checking the segment the bullet travelled this frame closes that.
+// Distance from a point to a segment. Bullets travel ~31 px a frame, so a
+// point check alone lets a fast round tunnel straight past a 14 px target
+// between frames; testing the whole segment it travelled closes that gap.
 export function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax;
   const dy = by - ay;
   const len2 = dx * dx + dy * dy;
   let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 

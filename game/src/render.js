@@ -1,8 +1,10 @@
-// render.js — everything the player sees: the city, the cars, the people, the HUD,
-// the minimap, the menus and the mission banners. Pure drawing, no game logic.
-import { CITY, WORLD, COLORS, CARS, POLICE, MISSIONS, STORY } from './config.js';
+// render.js — everything the player sees: the city, the cars, the people,
+// the coins, the HUD, the minimap, the menus and the mission banners.
+// Pure drawing, no game logic.
+import { CITY, WORLD, COLORS, CARS, POLICE, MISSIONS, STORY, COINS } from './config.js';
 import { roadCenter } from './world.js';
 import { landmarkGlyph } from './landmarks.js';
+import { coinsTaken } from './collectibles.js';
 
 const BLOCK = CITY.block;
 const ROAD = CITY.road;
@@ -41,7 +43,6 @@ export class Renderer {
     const cam = this.camera;
     const w = this.canvas.width;
     const h = this.canvas.height;
-    // ground
     ctx.fillStyle = COLORS.sand;
     ctx.fillRect(0, 0, w, h);
     ctx.save();
@@ -80,7 +81,7 @@ export class Renderer {
         ctx.fillRect(ROAD + bx * PITCH, ROAD + by * PITCH, 6, BLOCK);
       }
     }
-    // buildings with sun-side shading
+    // buildings with sun-side shading and lit windows
     for (const b of world.buildings) {
       ctx.fillStyle = 'rgba(0,0,0,0.18)';
       ctx.fillRect(b.x + 6, b.y + 8, b.w, b.h);
@@ -115,7 +116,7 @@ export class Renderer {
       ctx.arc(palm.x, palm.y - 14, 9, 0, Math.PI * 2);
       ctx.fill();
     }
-    // named places: the paint shop zone, the bank, the pier and the hospital
+    // named places: paint-shop zone, bank, pier, hospital, HQ
     for (const l of world.landmarks) {
       if (l.kind === 'paint') {
         ctx.strokeStyle = 'rgba(240,192,64,0.9)';
@@ -126,7 +127,11 @@ export class Renderer {
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      ctx.fillStyle = l.kind === 'bank' ? '#3f7fd0' : l.kind === 'hospital' ? '#e0453a' : l.kind === 'pier' ? '#2fae7d' : 'rgba(20,24,32,0.75)';
+      ctx.fillStyle = l.kind === 'bank' ? '#3f7fd0'
+        : l.kind === 'hospital' ? '#e0453a'
+        : l.kind === 'pier' ? '#2fae7d'
+        : l.kind === 'hq' ? '#1d2a44'
+        : 'rgba(20,24,32,0.75)';
       ctx.beginPath();
       ctx.arc(l.x, l.y, 16, 0, Math.PI * 2);
       ctx.fill();
@@ -141,7 +146,7 @@ export class Renderer {
       ctx.textBaseline = 'alphabetic';
     }
     ctx.restore();
-    // warm sun tint
+    // warm golden-hour light wash
     const grad = ctx.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, 'rgba(255,200,110,0.10)');
     grad.addColorStop(1, 'rgba(255,150,60,0.16)');
@@ -226,6 +231,23 @@ export class Renderer {
     ctx.fillRect(g.x - 14, g.y - 20, 28 * Math.max(0, g.health / 60), 4);
   }
 
+  drawCoin(ctx, coin, time) {
+    const pulse = 1 + Math.sin(time * 4 + coin.index) * 0.12;
+    ctx.save();
+    ctx.translate(coin.x, coin.y);
+    ctx.fillStyle = 'rgba(240,192,64,0.35)';
+    ctx.beginPath(); ctx.arc(0, 0, 16 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = COLORS.gold;
+    ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7a5a10';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('S', 0, 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+  }
+
   drawWorld(world) {
     const ctx = this.ctx;
     this.drawCity(world);
@@ -257,6 +279,10 @@ export class Renderer {
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(f.pickedUp ? `FARE → ${f.destName} $${f.pay}` : 'RIDER — STOP HERE', f.pickedUp ? f.destX : f.rider.x, (f.pickedUp ? f.destY : f.rider.y) - 36);
+    }
+    // Solmar coins
+    for (const coin of world.coins) {
+      if (!coin.taken) this.drawCoin(ctx, coin, world.time);
     }
     // dropped cash bags
     for (const bag of world.side.bags) {
@@ -301,12 +327,35 @@ export class Renderer {
       ctx.fillRect(v.x - 20, v.y - 32, 40 * (v.health / 100), 5);
     }
     for (const car of world.traffic) this.drawCarShape(ctx, car.x, car.y, car.angle, car.color);
-    for (const car of world.cars) this.drawCarShape(ctx, car.x, car.y, car.angle, car.color);
+    for (const car of world.cars) {
+      this.drawCarShape(ctx, car.x, car.y, car.angle, car.wrecked ? '#55504a' : car.color);
+      if (car.wrecked) {
+        ctx.fillStyle = '#222';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('WRECKED', car.x, car.y - 26);
+      }
+    }
     for (const cop of world.police) {
       this.drawCarShape(ctx, cop.x, cop.y, cop.angle, '#1d2a44', true);
       const flash = Math.sin(cop.sirenPhase) > 0 ? '#e0453a' : '#3f7fd0';
       ctx.fillStyle = flash;
       ctx.beginPath(); ctx.arc(cop.x, cop.y, 5, 0, Math.PI * 2); ctx.fill();
+      if (cop.block) {
+        // striped barrier across the road behind the cruiser
+        ctx.save();
+        ctx.translate(cop.x, cop.y);
+        ctx.rotate(cop.angle);
+        ctx.fillStyle = '#f5eeda';
+        ctx.fillRect(-30, 16, 60, 8);
+        ctx.fillStyle = '#e0453a';
+        for (let s = -30; s < 30; s += 12) ctx.fillRect(s, 16, 6, 8);
+        ctx.restore();
+        ctx.fillStyle = '#e0453a';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('ROADBLOCK', cop.x, cop.y - 30);
+      }
     }
     for (const ped of world.pedestrians) this.drawPedestrian(ctx, ped);
     for (const g of world.gangsters) this.drawGangster(ctx, g);
@@ -367,14 +416,21 @@ export class Renderer {
       ctx.fill();
     }
     for (const l of world.landmarks) {
-      ctx.fillStyle = l.kind === 'hospital' ? '#ff8c8c' : l.kind === 'bank' ? '#6fa8ff' : '#f0c040';
+      ctx.fillStyle = l.kind === 'hospital' ? '#ff8c8c' : l.kind === 'bank' ? '#6fa8ff' : l.kind === 'hq' ? '#ff8c8c' : '#f0c040';
       ctx.font = 'bold 9px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(landmarkGlyph(l.kind), x0 + l.x * scale, y0 + l.y * scale + 3);
     }
+    for (const coin of world.coins) {
+      if (coin.taken) continue;
+      ctx.fillStyle = COLORS.gold;
+      ctx.beginPath();
+      ctx.arc(x0 + coin.x * scale, y0 + coin.y * scale, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.textAlign = 'left';
     for (const cop of world.police) {
-      ctx.fillStyle = '#6fa8ff';
+      ctx.fillStyle = cop.block ? '#e0453a' : '#6fa8ff';
       ctx.beginPath();
       ctx.arc(x0 + cop.x * scale, y0 + cop.y * scale, 3.5, 0, Math.PI * 2);
       ctx.fill();
@@ -388,14 +444,22 @@ export class Renderer {
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
+    // district name under the minimap
+    ctx.fillStyle = 'rgba(20,24,32,0.72)';
+    ctx.beginPath(); ctx.roundRect(x0 - 6, y0 + size + 4, size + 12, 24, 6); ctx.fill();
+    ctx.fillStyle = COLORS.gold;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(world.districtName().toUpperCase(), x0 + size / 2, y0 + size + 21);
+    ctx.textAlign = 'left';
   }
 
   drawHud(world) {
     const ctx = this.ctx;
     const w = this.canvas.width;
-    // top-left: cash + stats
+    // top-left: cash + stats + coins
     ctx.fillStyle = 'rgba(20,24,32,0.72)';
-    ctx.beginPath(); ctx.roundRect(14, 14, 320, 74, 8); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(14, 14, 340, 92, 8); ctx.fill();
     ctx.fillStyle = COLORS.hud;
     ctx.font = 'bold 22px sans-serif';
     ctx.textAlign = 'left';
@@ -403,10 +467,13 @@ export class Renderer {
     ctx.fillText(`$${world.cash.toLocaleString()}`, 26, 42);
     ctx.font = '13px sans-serif';
     ctx.fillStyle = '#c9c2ae';
-    ctx.fillText(`Cars stolen ${world.carsStolen}   •   Fares ${world.faresDone}   •   Score ${world.kills * 50 + world.cash}`, 26, 64);
-    ctx.fillText(world.player.onFoot ? 'ON FOOT — press E near a car to steal it' : `DRIVING ${world.player.car ? world.player.car.name : ''} — E to get out`, 26, 82);
+    ctx.fillText(`Cars stolen ${world.carsStolen}   •   Fares ${world.faresDone}   •   Near miss ${world.nearMisses}`, 26, 64);
+    ctx.fillStyle = COLORS.gold;
+    ctx.fillText(`Solmar coins ${coinsTaken(world.coins)}/${COINS.total}   •   Score ${world.kills * 50 + world.cash}`, 26, 84);
+    ctx.fillStyle = '#c9c2ae';
+    ctx.fillText(world.player.onFoot ? 'ON FOOT — press E near a car to steal it' : `DRIVING ${world.player.car ? world.player.car.name : ''} — E to get out`, 26, 102);
     // wanted stars — tucked under the minimap so nothing overlaps
-    const wy = 200;
+    const wy = 232;
     ctx.fillStyle = 'rgba(20,24,32,0.72)';
     ctx.beginPath(); ctx.roundRect(w - 250, wy, 236, 40, 8); ctx.fill();
     ctx.font = 'bold 15px sans-serif';
@@ -440,8 +507,9 @@ export class Renderer {
       ctx.font = 'bold 15px sans-serif';
       ctx.fillText(`${mph} MPH`, w - 96, this.canvas.height - 30);
     }
-    // mission countdown (Pier 9 getaway)
-    if (world.mission && world.mission.id === 'm6' && world.missionState === 'active') {
+    // mission countdown (Pier 9 getaway and the ledger escape)
+    if (world.mission && (world.mission.id === 'm6' || world.mission.id === 'm7') && world.missionState === 'active'
+      && (world.mission.id === 'm6' || world.missionStage === 'escape')) {
       const t = Math.max(0, Math.ceil(world.missionTimer));
       ctx.fillStyle = t <= 15 ? 'rgba(224,69,58,0.85)' : 'rgba(20,24,32,0.78)';
       ctx.beginPath(); ctx.roundRect(w / 2 - 90, 74, 180, 40, 8); ctx.fill();
@@ -462,7 +530,7 @@ export class Renderer {
       ctx.fillText(f.pickedUp ? `TAXI FARE → ${f.destName} — $${f.pay} on arrival` : 'TAXI FARE — stop by the rider', w / 2, this.canvas.height - 88);
       ctx.textAlign = 'left';
     }
-    // health bar
+    // health bar + car condition, bottom left
     ctx.fillStyle = 'rgba(20,24,32,0.72)';
     ctx.beginPath(); ctx.roundRect(14, this.canvas.height - 52, 230, 36, 8); ctx.fill();
     ctx.fillStyle = '#c9c2ae';
@@ -472,6 +540,18 @@ export class Renderer {
     ctx.fillRect(84, this.canvas.height - 40, 140, 12);
     ctx.fillStyle = world.player.health > 40 ? '#2fae7d' : '#e0453a';
     ctx.fillRect(84, this.canvas.height - 40, 140 * (world.player.health / 100), 12);
+    if (!world.player.onFoot && world.player.car) {
+      const car = world.player.car;
+      ctx.fillStyle = 'rgba(20,24,32,0.72)';
+      ctx.beginPath(); ctx.roundRect(14, this.canvas.height - 96, 230, 36, 8); ctx.fill();
+      ctx.fillStyle = '#c9c2ae';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText('CAR', 26, this.canvas.height - 74);
+      ctx.fillStyle = '#333';
+      ctx.fillRect(84, this.canvas.height - 84, 140, 12);
+      ctx.fillStyle = car.health > 40 ? '#2fae7d' : car.health > 0 ? '#ff8c3a' : '#e0453a';
+      ctx.fillRect(84, this.canvas.height - 84, 140 * Math.max(0, car.health / 100), 12);
+    }
     // mission banner
     if (world.mission && world.missionState === 'active') {
       ctx.fillStyle = 'rgba(20,24,32,0.78)';
@@ -540,7 +620,7 @@ export class Renderer {
       'WASD / arrows — move & drive   •   E — steal / exit car',
       'Mouse — aim & shoot   •   R — reload   •   F — punch   •   Space — handbrake',
       'T — taxi fare   •   Shift — sprint   •   P — pause   •   M — mute',
-      '6 story jobs, taxi fares, the paint shop — progress saves automatically',
+      '7 story jobs, 10 hidden Solmar coins, taxi fares, the paint shop — progress saves automatically',
     ];
     lines.forEach((line, i) => ctx.fillText(line, w / 2, h * 0.62 + i * 24));
     if (saveExists) {
@@ -568,7 +648,7 @@ export class Renderer {
     ctx.fillText('P — resume      S — save progress      Q — quit to title', w / 2, h * 0.4 + 40);
     ctx.font = '15px sans-serif';
     ctx.fillStyle = '#c9c2ae';
-    ctx.fillText(`Cash $${world.cash.toLocaleString()}   •   Cars stolen ${world.carsStolen}   •   Missions done ${world.missionIndex}`, w / 2, h * 0.4 + 74);
+    ctx.fillText(`Cash $${world.cash.toLocaleString()}   •   Cars stolen ${world.carsStolen}   •   Missions done ${world.missionIndex}   •   Coins ${coinsTaken(world.coins)}/${COINS.total}`, w / 2, h * 0.4 + 74);
     ctx.textAlign = 'left';
   }
 
@@ -581,14 +661,14 @@ export class Renderer {
     ctx.textAlign = 'center';
     ctx.fillStyle = COLORS.gold;
     ctx.font = 'bold 34px sans-serif';
-    ctx.fillText('SOLMAR — THE CREW', w / 2, 90);
+    ctx.fillText('SOLMAR — THE CREW', w / 2, 80);
     ctx.fillStyle = COLORS.hud;
     ctx.font = '16px sans-serif';
-    ctx.fillText('Pick a job. Each one pays — and the police remember.', w / 2, 122);
+    ctx.fillText('Pick a job. Each one pays — and the police remember.', w / 2, 108);
     const cardW = 560;
-    const cardH = 86;
+    const cardH = 68;
     MISSIONS.forEach((m, i) => {
-      const y = 148 + i * (cardH + 12);
+      const y = 128 + i * (cardH + 8);
       const done = i < world.missionIndex;
       const available = i === world.missionIndex;
       ctx.fillStyle = available ? 'rgba(240,192,64,0.16)' : 'rgba(20,24,32,0.8)';
@@ -602,7 +682,7 @@ export class Renderer {
       ctx.fillStyle = COLORS.hud;
       ctx.font = '13px sans-serif';
       const wrapped = this.wrapText(m.brief, 72);
-      wrapped.forEach((line, li) => ctx.fillText(line, w / 2, y + 50 + li * 17));
+      wrapped.forEach((line, li) => ctx.fillText(line, w / 2, y + 44 + li * 17));
       if (done) {
         ctx.fillStyle = '#2fae7d';
         ctx.font = 'bold 14px sans-serif';
@@ -611,7 +691,7 @@ export class Renderer {
     });
     ctx.fillStyle = '#ffd27d';
     ctx.font = 'bold 16px sans-serif';
-    ctx.fillText('Press 1–6 to start a job — Esc to keep roaming free', w / 2, 148 + MISSIONS.length * (cardH + 12) + 4);
+    ctx.fillText('Press 1–7 to start a job — Esc to keep roaming free', w / 2, 128 + MISSIONS.length * (cardH + 8) + 16);
     ctx.textAlign = 'left';
   }
 
@@ -684,7 +764,7 @@ export class Renderer {
     STORY.finale.forEach((line, i) => ctx.fillText(line, w / 2, h * 0.3 + 44 + i * 30));
     ctx.fillStyle = '#ffd27d';
     ctx.font = 'bold 16px sans-serif';
-    ctx.fillText(`Cash $${world.cash.toLocaleString()}   •   Cars stolen ${world.carsStolen}   •   Fares ${world.faresDone}   •   Press ENTER to keep roaming free`, w / 2, h * 0.3 + 44 + STORY.finale.length * 30 + 24);
+    ctx.fillText(`Cash $${world.cash.toLocaleString()}   •   Cars stolen ${world.carsStolen}   •   Fares ${world.faresDone}   •   Coins ${coinsTaken(world.coins)}/${COINS.total}   •   Press ENTER to keep roaming free`, w / 2, h * 0.3 + 44 + STORY.finale.length * 30 + 24);
     ctx.textAlign = 'left';
   }
 }
