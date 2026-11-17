@@ -5,12 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solmar Heat — an open-world crime story</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #101018; }
-  #game { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #1a1408;
+  }
+  #game {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: crosshair;
+    image-rendering: auto;
+  }
+  #hint {
+    position: fixed;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    color: rgba(245, 238, 218, 0.55);
+    font: 12px sans-serif;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    user-select: none;
+  }
 </style>
 </head>
 <body>
 <canvas id="game" width="1280" height="800"></canvas>
-<script type="module" src="src/main.js"></script>
+<div id="hint">SOLMAR HEAT — WASD move &amp; drive · E steal car · mouse aim &amp; shoot · F punch · Shift sprint · P pause · Tab jobs</div>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>

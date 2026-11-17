@@ -1,7 +1,13 @@
-// random.js — small deterministic random helpers for Solmar Heat.
-// The city layout is generated from a fixed seed so every player sees the
-// same Solmar; gameplay randomness (traffic spawns, pedestrian colours) uses
-// a session seed that screenshot mode can pin down for reproducible shots.
+// random.js — small deterministic random helpers so the city, the traffic and the
+// screenshot states all come out the same way from the same seed.
+export function hashSeed(text) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -15,27 +21,42 @@ export function mulberry32(seed) {
 }
 
 export function makeRng(seed) {
-  const next = mulberry32(seed);
+  const next = mulberry32(typeof seed === 'string' ? hashSeed(seed) : seed);
   return {
     next,
-    // Float in [min, max).
-    range(min, max) { return min + next() * (max - min); },
-    // Integer in [min, max] inclusive.
-    int(min, max) { return min + Math.floor(next() * (max - min + 1)); },
-    // One element of an array.
-    pick(list) { return list[Math.floor(next() * list.length)]; },
-    // True with probability p.
-    chance(p) { return next() < p; },
-    // Shuffle a copy of an array.
-    shuffle(list) {
-      const out = list.slice();
-      for (let i = out.length - 1; i > 0; i--) {
-        const j = Math.floor(next() * (i + 1));
-        const tmp = out[i];
-        out[i] = out[j];
-        out[j] = tmp;
-      }
-      return out;
+    range(min, max) {
+      return min + next() * (max - min);
+    },
+    int(min, max) {
+      return Math.floor(this.range(min, max + 1));
+    },
+    pick(list) {
+      return list[Math.floor(next() * list.length)];
+    },
+    chance(p) {
+      return next() < p;
     },
   };
+}
+
+export function clamp(value, min, max) {
+  return value < min ? min : value > max ? max : value;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function dist(ax, ay, bx, by) {
+  return Math.hypot(bx - ax, by - ay);
+}
+
+export function angleTo(ax, ay, bx, by) {
+  return Math.atan2(by - ay, bx - ax);
+}
+
+export function wrapAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
 }
