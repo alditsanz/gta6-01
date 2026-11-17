@@ -1,16 +1,8 @@
-// random.js — deterministic random helpers and geometry.
-// One seed drives the city, the traffic and the screenshot states, so the
-// same seed always builds the same Solmar.
-export function hashSeed(text) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
+// Seeded randomness for Solmar Heat: one small generator, deterministic
+// from a seed, so a screenshot run replays the same city every time.
 
-export function mulberry32(seed) {
+/** Mulberry32: a tiny fast seeded PRNG. */
+export function createRandom(seed) {
   let a = seed >>> 0;
   return function next() {
     a |= 0;
@@ -21,58 +13,33 @@ export function mulberry32(seed) {
   };
 }
 
-export function makeRng(seed) {
-  const next = mulberry32(typeof seed === 'string' ? hashSeed(seed) : seed);
-  return {
-    next,
-    range(min, max) {
-      return min + next() * (max - min);
-    },
-    int(min, max) {
-      return Math.floor(this.range(min, max + 1));
-    },
-    pick(list) {
-      return list[Math.floor(next() * list.length)];
-    },
-    chance(p) {
-      return next() < p;
-    },
-  };
+/** A float in [min, max). */
+export function range(rng, min, max) {
+  return min + rng() * (max - min);
 }
 
-export function clamp(value, min, max) {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
+/** An integer in [min, max] inclusive. */
+export function int(rng, min, max) {
+  return min + Math.floor(rng() * (max - min + 1));
 }
 
-export function lerp(a, b, t) {
-  return a + (b - a) * t;
+/** True with probability p. */
+export function chance(rng, p) {
+  return rng() < p;
 }
 
-export function dist(ax, ay, bx, by) {
-  return Math.hypot(bx - ax, by - ay);
+/** A random element of an array. */
+export function pick(rng, arr) {
+  return arr[Math.floor(rng() * arr.length)];
 }
 
-// Distance from a point to a segment. Bullets travel ~31 px a frame, so a
-// point check alone lets a fast round tunnel straight past a 14 px target
-// between frames; testing the whole segment it travelled closes that gap.
-export function segDist(px, py, ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len2 = dx * dx + dy * dy;
-  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
-  if (t < 0) t = 0;
-  else if (t > 1) t = 1;
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-}
-
-export function angleTo(ax, ay, bx, by) {
-  return Math.atan2(by - ay, bx - ax);
-}
-
-export function wrapAngle(a) {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
-  return a;
+/** Fisher–Yates shuffle, in place, driven by the seeded rng. */
+export function shuffle(rng, arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
 }

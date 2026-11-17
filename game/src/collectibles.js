@@ -1,54 +1,45 @@
-// collectibles.js — the ten Solmar coins hidden around the city.
-// One job: place the coins on fixed road-grid cells, pay out when the
-// player walks or drives over one, and remember which were taken so a
-// save file can restore them. The world owns the array (world.coins);
-// this file builds it and steps the pickup check.
-import { COINS } from './config.js';
-import { roadCenter } from './world.js';
-import { dist } from './random.js';
+// The ten hidden Solmar coins: fixed spots, $75 each, saved with the game.
 
-export function buildCoins() {
-  return COINS.spots.map(([i, j], index) => ({
-    id: `coin-${index}`,
-    index,
-    x: roadCenter(i),
-    y: roadCenter(j),
-    amount: COINS.pay,
-    taken: false,
-  }));
+import { COIN_SPOTS, COIN_VALUE } from './config.js';
+
+/** Fresh coin state: one entry per fixed spot, none taken. */
+export function createCoins() {
+  return COIN_SPOTS.map((s, i) => ({ id: i, x: s.x, y: s.y, taken: false, bob: i * 0.7 }));
 }
 
-export function coinsTaken(coins) {
-  let n = 0;
-  for (const c of coins) if (c.taken) n += 1;
-  return n;
+/** Coins still on the map. */
+export function coinsLeft(coins) {
+  return coins.filter((c) => !c.taken).length;
 }
 
-// Walk or drive over a coin to pocket it. Returns how many were taken.
-export function checkCoins(world) {
-  const p = world.player;
-  let found = 0;
-  for (const coin of world.coins) {
-    if (coin.taken) continue;
-    if (dist(p.x, p.y, coin.x, coin.y) < 30) {
-      coin.taken = true;
-      world.cash += coin.amount;
-      found += 1;
-      world.flash(`Solmar coin +$${coin.amount} — ${coinsTaken(world.coins)}/${COINS.total} found`);
-      if (world.onCoin) world.onCoin();
+/** Coins collected so far. */
+export function coinsGot(coins) {
+  return coins.filter((c) => c.taken).length;
+}
+
+/**
+ * Pick up any coin the player stands on. Returns the payout earned
+ * this call (0 or more coins x COIN_VALUE) and marks them taken.
+ */
+export function collectCoins(coins, px, py) {
+  let earned = 0;
+  for (const c of coins) {
+    if (c.taken) continue;
+    if (Math.hypot(c.x - px, c.y - py) < 34) {
+      c.taken = true;
+      earned += COIN_VALUE;
     }
   }
-  return found;
+  return earned;
 }
 
-// Restore a save's taken coins: the save stores taken coin indices.
-export function applyCoinSave(coins, takenIndices) {
-  if (!Array.isArray(takenIndices)) return;
-  for (const i of takenIndices) {
-    if (coins[i]) coins[i].taken = true;
-  }
+/** Restore taken-coin ids into fresh coin state (save/load). */
+export function restoreCoins(coins, takenIds) {
+  const taken = new Set(takenIds);
+  for (const c of coins) c.taken = taken.has(c.id);
 }
 
-export function takenCoinIndices(coins) {
-  return coins.filter((c) => c.taken).map((c) => c.index);
+/** The taken-coin ids to store in a save. */
+export function takenCoinIds(coins) {
+  return coins.filter((c) => c.taken).map((c) => c.id);
 }

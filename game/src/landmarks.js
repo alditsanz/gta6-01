@@ -1,53 +1,42 @@
-// landmarks.js — the named places of Solmar: bank, hospital, paint shop,
-// motel, pier, docks, plaza and the SCPD headquarters. One job: turn the
-// LANDMARKS table in config.js into world coordinates and answer
-// "what is near here?". The renderer draws their labels; the minimap draws
-// their glyphs.
+// Solmar's landmarks: the named places the story and the side systems
+// revolve around, with the zone tests the game logic uses.
+
 import { LANDMARKS } from './config.js';
-import { roadCenter } from './world.js';
-import { dist } from './random.js';
 
-export function buildLandmarks() {
-  return LANDMARKS.map((def) => ({
-    id: def.id,
-    name: def.name,
-    kind: def.kind,
-    note: def.note,
-    x: roadCenter(def.i),
-    y: roadCenter(def.j),
-  }));
+/** Every landmark, in a fixed order for the renderer and the minimap. */
+export const LANDMARK_LIST = [
+  LANDMARKS.hq,
+  LANDMARKS.paint,
+  LANDMARKS.marina,
+  LANDMARKS.pier,
+  LANDMARKS.plaza,
+  LANDMARKS.hospital,
+];
+
+/** Is a point inside a landmark's zone (radius in world units)? */
+export function insideZone(x, y, lm, radius = 90) {
+  const dx = x - lm.x;
+  const dy = y - lm.y;
+  return dx * dx + dy * dy <= radius * radius;
 }
 
-export function landmarkById(landmarks, id) {
-  for (const l of landmarks) {
-    if (l.id === id) return l;
-  }
-  return null;
-}
-
-export function landmarkNear(landmarks, x, y, radius) {
+/** The nearest landmark to a point, with its distance. */
+export function nearestLandmark(x, y) {
   let best = null;
-  let bestD = radius;
-  for (const l of landmarks) {
-    const d = dist(x, y, l.x, l.y);
+  let bestD = Infinity;
+  for (const lm of LANDMARK_LIST) {
+    const d = Math.hypot(x - lm.x, y - lm.y);
     if (d < bestD) {
-      best = l;
       bestD = d;
+      best = lm;
     }
   }
-  return best;
+  return { landmark: best, distance: bestD };
 }
 
-// The single letter a landmark gets on the minimap and in the world.
-export function landmarkGlyph(kind) {
-  switch (kind) {
-    case 'hospital': return '+';
-    case 'bank': return '$';
-    case 'paint': return 'P';
-    case 'pier': return '9';
-    case 'motel': return 'M';
-    case 'docks': return 'D';
-    case 'hq': return 'H';
-    default: return '•';
-  }
+/** A short label the HUD shows when the player is near a landmark. */
+export function landmarkLabel(x, y) {
+  const { landmark, distance } = nearestLandmark(x, y);
+  if (distance < 170) return landmark.name;
+  return null;
 }

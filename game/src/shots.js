@@ -1,126 +1,124 @@
-// shots.js — deterministic states for the four screenshots, driven by query params.
-//   ?shot=start   — title screen over the city
-//   ?shot=drive   — the player driving the Vento taxi with a fare aboard, a Solmar coin ahead
-//   ?shot=chase   — a 4-star police chase in the Pier 9 getaway: timer, roadblock, cops, mission banner
-//   ?shot=mission — the ledger heist at SCPD HQ: guards, cops closing in, wanted stars, ammo HUD
-// Every state is built from the same seeded world, so a re-render looks the same.
-import { roadCenter } from './world.js';
-import { CARS } from './config.js';
-import { landmarkById } from './landmarks.js';
+// Screenshot staging for Solmar Heat: ?shot=start|drive|chase|mission
+// (with &seed=N) puts the game into a fixed, deterministic scene so the
+// four screenshots are real renders of the game's own code.
 
-export function applyShot(game, shot, seed) {
-  const world = game.world;
-  const player = world.player;
-  if (shot === 'start') {
-    game.state = 'start';
+import { SCREEN_TITLE, SCREEN_PLAY } from './render.js';
+import { LANDMARKS } from './config.js';
+import { startMission } from './main.js';
+
+/** Stage one named scene on a fresh state. Deterministic for a fixed seed. */
+export function stageShot(state, name) {
+  const p = state.player;
+  if (name === 'start') {
+    state.screen = SCREEN_TITLE;
+    state.money = 1250;
+    state.missionsDone = [true, true, false, false, false, false, false];
+    state.rank = 2;
+    state.saveExists = true;
     return;
   }
-  if (shot === 'drive') {
-    game.state = 'play';
-    const car = world.cars.find((c) => c.def === 8);
-    car.stolen = true;
-    world.carsStolen = 1;
-    player.onFoot = false;
-    player.car = car;
-    car.x = roadCenter(4);
-    car.y = roadCenter(4);
-    car.angle = Math.PI / 2;
-    car.speed = 200;
-    player.x = car.x;
-    player.y = car.y;
-    world.cash = 1250;
-    // A fare aboard: the rider is in the taxi, the destination is the pier.
-    const pier = landmarkById(world.landmarks, 'pier');
-    const rider = world.pedestrians[0];
-    rider.x = car.x;
-    rider.y = car.y;
-    world.side.fare = {
-      rider,
-      destX: pier.x,
-      destY: pier.y,
-      destName: pier.name,
-      pay: 310,
-      pickedUp: true,
-    };
-    world.faresDone = 2;
-    // A Solmar coin sits on the road just ahead, and a traffic car rides
-    // alongside for a near-miss moment.
-    const coin = world.coins[0];
-    coin.x = car.x + 40;
-    coin.y = car.y + 190;
-    world.coins[1].taken = true;
-    world.cash += 75;
-    const near = world.traffic[0];
-    near.x = car.x + 60;
-    near.y = car.y + 90;
-    near.angle = Math.PI / 2;
+  state.screen = SCREEN_PLAY;
+  if (name === 'drive') {
+    // Cruising down Sunset Mile in the Falco, traffic around, coins ahead.
+    const falco = state.cars.find((c) => c.model === 'Falco');
+    p.inCar = true;
+    p.car = falco;
+    falco.stolen = true;
+    falco.x = 103;
+    falco.y = 871;
+    falco.angle = 0;
+    falco.speed = 260;
+    p.x = falco.x;
+    p.y = falco.y;
+    p.angle = 0;
+    state.money = 1840;
+    state.score = 3120;
+    state.carsStolen = 3;
+    state.faresDone = 2;
+    state.nearMisses = 5;
+    state.coins[4].taken = true;
+    state.coins[8].taken = true;
+    state.rank = 2;
+    state.traffic[0].x = 420;
+    state.traffic[0].y = 871;
+    state.traffic[1].x = 700;
+    state.traffic[1].y = 839;
+    state.traffic[2].x = 103;
+    state.traffic[2].y = 1127;
+    state.traffic[2].angle = Math.PI / 2;
+    state.peds[0].x = 160;
+    state.peds[0].y = 820;
+    state.peds[1].x = 500;
+    state.peds[1].y = 930;
+    setToast(state, 'Near miss! +$15', true);
     return;
   }
-  if (shot === 'chase') {
-    game.state = 'play';
-    world.startMission(5);
-    const car = world.cars.find((c) => c.def === 7);
-    car.stolen = true;
-    world.carsStolen = 1;
-    player.onFoot = false;
-    player.car = car;
-    car.x = roadCenter(4);
-    car.y = roadCenter(5);
-    car.angle = 0;
-    car.speed = 260;
-    player.x = car.x;
-    player.y = car.y;
-    world.cash = 5400;
-    world.addHeat(4, 'Pier 9 getaway'); // 14 from the mission start + 4 = 18 heat, 4 stars
-    world.missionTimer = 68;
-    // four cop cars right behind the player for the chase frame
-    for (let i = 0; i < 4; i++) {
-      world.police.push({
-        id: `shot-cop-${i}`,
-        x: car.x - 160 - i * 90,
-        y: car.y + (i - 1) * 46,
-        angle: 0, speed: 280, block: false,
-        path: [], pathIndex: 0, repath: 0, sirenPhase: i * 2,
-      });
-    }
-    // and the roadblock waiting ahead on the same street
-    world.spawnRoadblock();
-    world.flash('Kane has the whole SCPD on you — Pier 9, 68 seconds!');
+  if (name === 'chase') {
+    // Job 6 in full flight: 4 stars, a roadblock ahead, police on the tail,
+    // the Pier 9 timer running, the objective on the HUD.
+    state.missionsDone = [true, true, true, true, true, false, false];
+    state.rank = 5;
+    startMission(state, 6);
+    state.mission.t = 42;
+    const falco = state.cars.find((c) => c.model === 'Falco');
+    p.inCar = true;
+    p.car = falco;
+    falco.stolen = true;
+    falco.x = 1383;
+    falco.y = 1895;
+    falco.angle = 0;
+    falco.speed = 330;
+    p.x = falco.x;
+    p.y = falco.y;
+    p.angle = 0;
+    state.heat = 90;
+    state.stars = 4;
+    state.money = 3210;
+    state.score = 8450;
+    state.carsStolen = 6;
+    state.faresDone = 4;
+    state.nearMisses = 9;
+    state.rank = 5;
+    state.roadblocks = [{ x: 1895, y: 1895, angle: Math.PI / 2 }];
+    state.police = [
+      { x: 1127, y: 1895, angle: 0, speed: 380, maxSpeed: 390, path: [], pathI: 0, repath: 0, siren: 1 },
+      { x: 1639, y: 2151, angle: Math.PI / 2, speed: 360, maxSpeed: 390, path: [], pathI: 0, repath: 0, siren: 3 },
+    ];
+    state.traffic[0].x = 1639;
+    state.traffic[0].y = 1895;
+    state.traffic[1].x = 1383;
+    state.traffic[1].y = 2151;
+    setToast(state, '3 stars from the start — run!', false);
     return;
   }
-  if (shot === 'mission') {
-    game.state = 'play';
-    world.missionIndex = 6;
-    world.startMission(6);
-    const hq = landmarkById(world.landmarks, 'hq');
-    player.onFoot = true;
-    player.car = null;
-    player.x = hq.x - 120;
-    player.y = hq.y + 60;
-    player.angle = 0;
-    player.health = 82;
-    world.cash = 7400;
-    world.ammo.mag = 9;
-    world.ammo.reserve = 36;
-    world.addHeat(12, 'Ledger alarm');
-    // two cop cars closing in on the heist
-    for (let i = 0; i < 2; i++) {
-      world.police.push({
-        id: `shot-cop-m7-${i}`,
-        x: hq.x - 280 - i * 110,
-        y: hq.y - 80 + i * 100,
-        angle: 0, speed: 280, block: false,
-        path: [], pathIndex: 0, repath: 0, sirenPhase: i * 2.5,
-      });
-    }
-    world.flash('Three guards on the ledger room — clear them out');
+  if (name === 'mission') {
+    // The Last Ledger at SCPD HQ: guards with health pips, the player
+    // aiming on foot, ammo on the HUD, 4 stars overhead.
+    state.missionsDone = [true, true, true, true, true, true, false];
+    state.rank = 6;
+    startMission(state, 7);
+    p.inCar = false;
+    p.car = null;
+    p.x = LANDMARKS.hq.x - 190;
+    p.y = LANDMARKS.hq.y + 60;
+    p.angle = 0;
+    p.health = 82;
+    state.weapon.mag = 9;
+    state.weapon.reserve = 36;
+    state.guards[0].health = 66;
+    state.money = 4980;
+    state.score = 12400;
+    state.carsStolen = 8;
+    state.faresDone = 5;
+    state.nearMisses = 12;
+    state.rank = 6;
+    state.bullets = [{ x: p.x + 90, y: p.y - 6, px: p.x + 40, py: p.y - 6, vx: 900, vy: 0, life: 0.5 }];
     return;
   }
-  game.state = 'start';
+  // Unknown shot name: fall back to the title screen.
+  state.screen = SCREEN_TITLE;
 }
 
-export function shotList() {
-  return ['start', 'drive', 'chase', 'mission'];
+function setToast(state, text, good) {
+  state.toast = { text, t: state.time, good: !!good };
 }
-
-export { CARS };

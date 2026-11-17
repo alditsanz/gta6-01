@@ -1,108 +1,138 @@
-// sidejobs.js — the work between story missions: taxi fares, the paint
-// shop and dropped cash. One job: small paid activities that keep the
-// free-roam city worth driving, with their own state and payouts.
-// The world owns the state (world.side.fare, world.side.bags); this file
-// steps it.
-import { TAXI, PAINT_SHOP } from './config.js';
-import { dist } from './random.js';
-import { landmarkById } from './landmarks.js';
+// Side jobs: taxi fares, near-miss bonuses, the paint shop, and car
+// damage. Each function takes the pieces of game state it needs and
+// returns what changed, so the main loop stays the only orchestrator.
 
-export function createSideJobs() {
-  return { fare: null, fareCooldown: 0, bags: [] };
-}
+import { FARE_PAY, NEAR_MISS, CAR, WANTED, LANDMARKS } from './config.js';
+import { roadAt } from './config.js';
+import { insideZone } from './landmarks.js';
 
-// Start a taxi fare: a waiting rider on a sidewalk, a destination across
-// town, a fare that grows with the distance. Only one fare at a time.
-export function startFare(world) {
-  if (world.side.fare) return null;
-  const p = world.player;
-  const rider = world.pedestrians.find((ped) => dist(ped.x, ped.y, p.x, p.y) < 260 && ped.panic <= 0);
-  if (!rider) return null;
-  const dests = world.landmarks.filter((l) => dist(l.x, l.y, p.x, p.y) > 500);
-  const dest = dests[Math.floor(world.rng.next() * dests.length)] || world.landmarks[0];
-  const pay = Math.min(
-    TAXI.maxFare,
-    Math.round(TAXI.fareBase + dist(p.x, p.y, dest.x, dest.y) * TAXI.farePerPixel),
-  );
-  world.side.fare = {
-    rider,
-    destX: dest.x,
-    destY: dest.y,
-    destName: dest.name,
-    pay,
-    pickedUp: false,
-  };
-  rider.fareRider = true;
-  world.flash(`Fare: pick up the rider, then ${dest.name} — $${pay}`);
-  return world.side.fare;
-}
-
-export function updateFare(world) {
-  const fare = world.side.fare;
-  if (!fare) return;
-  const p = world.player;
-  if (!fare.pickedUp) {
-    // The rider walks to the car when it stops nearby.
-    if (dist(fare.rider.x, fare.rider.y, p.x, p.y) < 46 && !p.onFoot) {
-      fare.pickedUp = true;
-      world.flash(`Rider aboard — take them to ${fare.destName}`);
-    } else if (dist(fare.rider.x, fare.rider.y, p.x, p.y) < 46) {
-      world.flash('The rider wants a car — steal one first');
-    }
-    return;
-  }
-  if (dist(p.x, p.y, fare.destX, fare.destY) < 80 && !p.onFoot) {
-    world.cash += fare.pay;
-    world.faresDone += 1;
-    world.flash(`Fare paid — $${fare.pay}`);
-    fare.rider.fareRider = false;
-    world.side.fare = null;
-    world.side.fareCooldown = 4;
-  }
-}
-
-// Driving through Lou's Paint Shop buys a new identity: the wanted level
-// clears (for $200, when there is heat to clear) and a battered car comes
-// out repaired. The shop only works while driving.
-export function checkPaintShop(world) {
-  const p = world.player;
-  if (p.onFoot) return;
-  const shop = landmarkById(world.landmarks, 'paint');
-  if (!shop) return;
-  if (dist(p.x, p.y, shop.x, shop.y) >= PAINT_SHOP.radius) return;
-  const car = p.car;
-  if (car && car.health < 100) {
-    car.health = 100;
-    world.flash('Paint shop — car repaired, good as new');
-  }
-  if (world.wanted > 0 && world.cash >= PAINT_SHOP.cost) {
-    world.cash -= PAINT_SHOP.cost;
-    world.heat = 0;
-    world.wanted = 0;
-    world.police = [];
-    world.paintJobs += 1;
-    world.flash(`New paint — $${PAINT_SHOP.cost}. The heat forgot you.`);
-  }
-}
-
-// Dropped cash bags respawn around the city so free roam always pays a
-// little: walk or drive over one to pocket it.
-export function spawnCashBag(world, x, y, amount) {
-  const bag = { x, y, amount, taken: false };
-  world.side.bags.push(bag);
-  return bag;
-}
-
-export function checkCashBags(world) {
-  const p = world.player;
-  for (const bag of world.side.bags) {
-    if (bag.taken) continue;
-    if (dist(p.x, p.y, bag.x, bag.y) < 30) {
-      bag.taken = true;
-      world.cash += bag.amount;
-      world.flash(`Found $${bag.amount} in a dropped bag`);
-      if (world.onPickup) world.onPickup();
+/**
+ * Start a taxi fare: a waiting passenger stands at a road intersection
+ * near the player; the destination is a few intersections away.
+ * Returns the fare object, or null when no spot is free.
+ */
+export function startFare(rng, px, py) {
+  const spots = [];
+  for (let i = 0; i < 9; i++) {
+    for (let j = 0; j < 9; j++) {
+      const x = roadAt(i);
+      const y = roadAt(j);
+      const d = Math.hypot(x - px, y - py);
+      if (d > 180 && d < 900) spots.push({ x, y });
     }
   }
-  world.side.bags = world.side.bags.filter((b) => !b.taken);
+  if (spots.length === 0) return null;
+  const pickup = spots[Math.floor(rng() * spots.length)];
+  let dest = pickup;
+  let tries = 0;
+  while (tries++ < 40) {
+    const cand = { x: roadAt(Math.floor(rng() * 9)), y: roadAt(Math.floor(rng() * 9)) };
+    if (Math.hypot(cand.x - pickup.x, cand.y - pickup.y) > 700) {
+      dest = cand;
+      break;
+    }
+  }
+  return { pickup, dest, state: 'waiting', pay: FARE_PAY, timer: 0 };
+}
+
+/** The fare payout: base pay, a little more for a long ride. */
+export function farePayout(fare) {
+  const dist = Math.hypot(fare.dest.x - fare.pickup.x, fare.dest.y - fare.pickup.y);
+  return FARE_PAY + Math.round(dist / 400) * 10;
+}
+
+/**
+ * Advance a fare one step. Returns 'picked' when the passenger boards,
+ * 'done' when they are delivered (with the payout), 'lost' when the
+ * player dawdles too long on foot, else null.
+ */
+export function updateFare(fare, px, py, inCar, dt) {
+  if (!fare) return null;
+  fare.timer += dt;
+  if (fare.state === 'waiting') {
+    if (Math.hypot(fare.pickup.x - px, fare.pickup.y - py) < 40) {
+      if (inCar) {
+        fare.state = 'riding';
+        return 'picked';
+      }
+      return null;
+    }
+    if (fare.timer > 120) return 'lost';
+    return null;
+  }
+  if (fare.state === 'riding') {
+    if (Math.hypot(fare.dest.x - px, fare.dest.y - py) < 60) {
+      return 'done';
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Near-miss check: the player's car threading past a traffic car at
+ * speed, close enough to feel it but not touching. Returns the payout
+ * (NEAR_MISS.payout) when one is earned, else 0. The cooldown lives on
+ * the state object passed in.
+ */
+export function nearMissCheck(state, traffic) {
+  if (!state.player.inCar || !state.player.car) return 0;
+  const car = state.player.car;
+  if (Math.abs(car.speed) < NEAR_MISS.speed) return 0;
+  if (state.time - state.lastNearMiss < NEAR_MISS.cooldown) return 0;
+  for (const t of traffic) {
+    const dx = t.x - car.x;
+    const dy = t.y - car.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < NEAR_MISS.gap && dist > 26) {
+      // Must be passing alongside, not head-on into it.
+      const along = Math.abs(dx * Math.cos(car.angle) + dy * Math.sin(car.angle));
+      const across = Math.abs(-dx * Math.sin(car.angle) + dy * Math.cos(car.angle));
+      if (along < 60 && across > 18 && across < NEAR_MISS.gap) {
+        state.lastNearMiss = state.time;
+        return NEAR_MISS.payout;
+      }
+    }
+  }
+  return 0;
+}
+
+/**
+ * Wall damage: a car that hits a building loses CAR.wallDamage health.
+ * Returns true when the hit totaled the car.
+ */
+export function damageCarFromWall(car) {
+  car.health -= CAR.wallDamage;
+  if (car.health <= 0) {
+    car.health = 0;
+    car.wrecked = true;
+    car.speed = 0;
+    return true;
+  }
+  return false;
+}
+
+/** A wrecked car can never be driven or stolen again. */
+export function canEnterCar(car) {
+  return !car.wrecked;
+}
+
+/**
+ * Lou's Paint Shop: inside the shop zone the car is repaired and the
+ * heat is cleared. Returns true when the shop did work this call.
+ */
+export function paintShopService(state) {
+  const p = state.player;
+  if (!p.inCar || !p.car) return false;
+  if (!insideZone(p.car.x, p.car.y, LANDMARKS.paint, 110)) return false;
+  if (state.heat <= 0 && p.car.health >= CAR.health) return false;
+  p.car.health = CAR.health;
+  state.heat = 0;
+  state.lastCrimeT = -999;
+  return true;
+}
+
+/** Heat for stealing a car, applied through the wanted helper in main. */
+export function stealHeatAmount() {
+  return WANTED.stealHeat;
 }

@@ -1,101 +1,117 @@
-// input.js — keyboard and mouse state, and a scripted stand-in for tests.
-// The game reads this object and never the raw events, so a headless
-// play-test can drive the same code the browser drives.
-import { CONTROLS } from './config.js';
+// Keyboard + mouse input for Solmar Heat. The listener set is attached
+// only when createInput runs, so importing this module is side-effect free.
 
-const PREVENTED = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
+export const ACTION_CONFIRM = 'confirm';
+export const ACTION_PAUSE = 'pause';
+export const ACTION_MUTE = 'mute';
+export const ACTION_RELOAD = 'reload';
+export const ACTION_PUNCH = 'punch';
+export const ACTION_STEAL = 'steal';
+export const ACTION_TAXI = 'taxi';
+export const ACTION_HANDBRAKE = 'handbrake';
+export const ACTION_SPRINT = 'sprint';
 
-export class Input {
-  constructor(canvas) {
-    this.keys = new Set();
-    this.pressed = new Set();
-    this.mouse = { x: 0, y: 0, down: false, clicked: false };
-    this.canvas = canvas;
-    this._onKeyDown = (e) => {
-      if (e.repeat) return;
-      this.keys.add(e.code);
-      this.pressed.add(e.code);
-      if (PREVENTED.includes(e.code)) e.preventDefault();
-    };
-    this._onKeyUp = (e) => this.keys.delete(e.code);
-    this._onMouseMove = (e) => {
-      const r = canvas.getBoundingClientRect();
-      this.mouse.x = e.clientX - r.left;
-      this.mouse.y = e.clientY - r.top;
-    };
-    this._onMouseDown = (e) => {
-      this.mouse.down = true;
-      this.mouse.clicked = true;
-      this._onMouseMove(e);
-    };
-    this._onMouseUp = () => {
-      this.mouse.down = false;
-    };
-    this._onBlur = () => {
-      this.keys.clear();
-      this.mouse.down = false;
-    };
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup', this._onKeyUp);
-    canvas.addEventListener('mousemove', this._onMouseMove);
-    canvas.addEventListener('mousedown', this._onMouseDown);
-    window.addEventListener('mouseup', this._onMouseUp);
-    window.addEventListener('blur', this._onBlur);
+/**
+ * Tracks held keys, mouse position in canvas pixels, and edge-triggered
+ * presses (a press fires once until the key is released). `onAction` is
+ * called for menu-level keys so the game loop stays the only updater.
+ */
+export function createInput(canvas) {
+  const keys = new Set();
+  const pressed = new Set();
+  const mouse = { x: 0, y: 0, down: false, clicked: false, worldX: 0, worldY: 0 };
+  let onAction = null;
+
+  function codeOf(e) {
+    return e.code;
   }
 
-  held(code) {
-    return this.keys.has(code);
+  function keyDown(e) {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    if (!keys.has(e.code)) pressed.add(e.code);
+    keys.add(e.code);
+    if (onAction) {
+      if (e.code === 'Enter' || e.code === 'Space') onAction(ACTION_CONFIRM);
+      if (e.code === 'KeyP' || e.code === 'Escape') onAction(ACTION_PAUSE);
+      if (e.code === 'KeyM') onAction(ACTION_MUTE);
+    }
   }
 
-  tapped(code) {
-    return this.pressed.has(code);
+  function keyUp(e) {
+    keys.delete(e.code);
   }
 
-  axis(codes) {
-    return codes.some((c) => this.keys.has(c)) ? 1 : 0;
+  function mouseMove(e) {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left;
+    mouse.y = e.clientY - rect.top;
   }
 
-  moveX() {
-    return this.axis(CONTROLS.right) - this.axis(CONTROLS.left);
+  function mouseDown(e) {
+    mouseMove(e);
+    mouse.down = true;
+    mouse.clicked = true;
+    if (onAction && e.button === 0) onAction(ACTION_CONFIRM);
   }
 
-  moveY() {
-    return this.axis(CONTROLS.down) - this.axis(CONTROLS.up);
+  function mouseUp() {
+    mouse.down = false;
   }
 
-  sprinting() {
-    return this.keys.has(CONTROLS.sprint) || this.keys.has('ShiftRight');
+  function blur() {
+    keys.clear();
   }
 
-  // Call once per frame, after the game has read the input.
-  endFrame() {
-    this.pressed.clear();
-    this.mouse.clicked = false;
-  }
+  window.addEventListener('keydown', keyDown);
+  window.addEventListener('keyup', keyUp);
+  window.addEventListener('blur', blur);
+  canvas.addEventListener('mousemove', mouseMove);
+  canvas.addEventListener('mousedown', mouseDown);
+  window.addEventListener('mouseup', mouseUp);
 
-  destroy() {
-    window.removeEventListener('keydown', this._onKeyDown);
-    window.removeEventListener('keyup', this._onKeyUp);
-    this.canvas.removeEventListener('mousemove', this._onMouseMove);
-    this.canvas.removeEventListener('mousedown', this._onMouseDown);
-    window.removeEventListener('mouseup', this._onMouseUp);
-    window.removeEventListener('blur', this._onBlur);
-  }
-}
-
-// Scripted input for headless tests: press and release keys by hand.
-export class ScriptedInput {
-  constructor() {
-    this.keys = new Set();
-    this.pressed = new Set();
-    this.mouse = { x: 640, y: 400, down: false, clicked: false };
-  }
-  held(code) { return this.keys.has(code); }
-  tapped(code) { return this.pressed.has(code); }
-  moveX() { return (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0); }
-  moveY() { return (this.keys.has('KeyS') ? 1 : 0) - (this.keys.has('KeyW') ? 1 : 0); }
-  sprinting() { return this.keys.has('ShiftLeft'); }
-  press(code) { this.keys.add(code); this.pressed.add(code); }
-  release(code) { this.keys.delete(code); }
-  endFrame() { this.pressed.clear(); this.mouse.clicked = false; }
+  return {
+    mouse,
+    setActionHandler(fn) {
+      onAction = fn;
+    },
+    /** Held right now. */
+    down(code) {
+      return keys.has(code);
+    },
+    /** Pressed since the last frame; consumed by reading. */
+    wasPressed(code) {
+      if (pressed.has(code)) {
+        pressed.delete(code);
+        return true;
+      }
+      return false;
+    },
+    /** WASD / arrows as a -1..1 movement vector. */
+    moveVector() {
+      let x = 0;
+      let y = 0;
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+      if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+      if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
+      if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
+      if (x !== 0 && y !== 0) {
+        x *= Math.SQRT1_2;
+        y *= Math.SQRT1_2;
+      }
+      return { x, y };
+    },
+    /** Mouse click since the last frame; consumed by reading. */
+    wasClicked() {
+      if (mouse.clicked) {
+        mouse.clicked = false;
+        return true;
+      }
+      return false;
+    },
+    /** Clear per-frame edge state at the end of a frame. */
+    endFrame() {
+      pressed.clear();
+      mouse.clicked = false;
+    },
+  };
 }

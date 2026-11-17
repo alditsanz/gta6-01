@@ -1,164 +1,178 @@
-// combat.js — shooting with a real magazine, and the Harbor Boys:
-// gangsters who strafe, keep their distance and shoot back.
-// One job: everything about a gunfight that is not the city itself.
-// The world owns the arrays (world.gangsters, world.bullets); this file
-// spawns the gangsters, steps their AI and resolves their bullets.
-import { PLAYER } from './config.js';
-import { dist, angleTo, clamp, segDist } from './random.js';
+// Combat: shooting with real bullet travel, punching, guards with
+// health pips, and ammo pickups. Bullets are tested along their whole
+// path each step (segment vs circle), so a fast bullet cannot tunnel
+// past a thin target.
 
-export function createAmmo() {
-  return { mag: PLAYER.magSize, reserve: PLAYER.reserveAmmo, reloading: 0 };
+import { COMBAT } from './config.js';
+
+/** A fresh pistol: full magazine, starting reserve. */
+export function createWeapon() {
+  return { mag: COMBAT.magSize, reserve: COMBAT.reserveStart, reloading: 0 };
 }
 
-export function startReload(ammo) {
-  if (ammo.reloading > 0) return false;
-  if (ammo.mag >= PLAYER.magSize) return false;
-  if (ammo.reserve <= 0) return false;
-  ammo.reloading = PLAYER.reloadSeconds;
+/** Fire one shot. Returns a bullet, or null when the gun cannot fire. */
+export function fireWeapon(weapon, x, y, angle) {
+  if (weapon.reloading > 0) return null;
+  if (weapon.mag <= 0) return null;
+  weapon.mag -= 1;
+  return {
+    x,
+    y,
+    px: x,
+    py: y,
+    vx: Math.cos(angle) * COMBAT.bulletSpeed,
+    vy: Math.sin(angle) * COMBAT.bulletSpeed,
+    life: 0.9,
+  };
+}
+
+/** Start a reload; finishes in COMBAT.reloadSeconds. Returns true when started. */
+export function startReload(weapon) {
+  if (weapon.reloading > 0 || weapon.mag >= COMBAT.magSize || weapon.reserve <= 0) return false;
+  weapon.reloading = COMBAT.reloadSeconds;
   return true;
 }
 
-export function tickReload(ammo, dt) {
-  if (ammo.reloading <= 0) return;
-  ammo.reloading -= dt;
-  if (ammo.reloading > 0) return;
-  ammo.reloading = 0;
-  const need = PLAYER.magSize - ammo.mag;
-  const take = Math.min(need, ammo.reserve);
-  ammo.mag += take;
-  ammo.reserve -= take;
-}
-
-// Fire one round if the magazine allows it. Returns 'shot', 'empty' or 'reloading'.
-export function tryFire(ammo) {
-  if (ammo.reloading > 0) return 'reloading';
-  if (ammo.mag <= 0) return 'empty';
-  ammo.mag -= 1;
-  return 'shot';
-}
-
-export function spawnGangsters(world, x, y, count, label) {
-  const made = [];
-  for (let i = 0; i < count; i++) {
-    const angle = (i / Math.max(1, count)) * Math.PI * 2;
-    const g = {
-      id: `harbor-${label}-${i}-${world.time.toFixed(0)}`,
-      x: x + Math.cos(angle) * 70,
-      y: y + Math.sin(angle) * 70,
-      angle: 0,
-      health: 60,
-      shootCooldown: world.rng.range(0.4, 1.2),
-      strafeDir: i % 2 === 0 ? 1 : -1,
-      strafeTimer: world.rng.range(0.5, 1.5),
-      walkPhase: world.rng.range(0, 6),
-    };
-    world.gangsters.push(g);
-    made.push(g);
-  }
-  return made;
-}
-
-export function gangsterCount(world) {
-  return world.gangsters.length;
-}
-
-// One frame of gangster AI: strafe sideways, close in when far, back off
-// when too close, and shoot at the player when the cooldown has run out.
-export function updateGangsters(world, dt) {
-  const p = world.player;
-  for (const g of world.gangsters) {
-    g.walkPhase += dt * 6;
-    g.shootCooldown -= dt;
-    g.strafeTimer -= dt;
-    if (g.strafeTimer <= 0) {
-      g.strafeDir *= -1;
-      g.strafeTimer = world.rng.range(0.6, 1.6);
-    }
-    const d = dist(g.x, g.y, p.x, p.y);
-    const toPlayer = angleTo(g.x, g.y, p.x, p.y);
-    g.angle = toPlayer;
-    const strafe = toPlayer + (Math.PI / 2) * g.strafeDir;
-    let mx = Math.cos(strafe) * 55;
-    let my = Math.sin(strafe) * 55;
-    if (d > 260) {
-      mx += Math.cos(toPlayer) * 70;
-      my += Math.sin(toPlayer) * 70;
-    } else if (d < 120) {
-      mx -= Math.cos(toPlayer) * 70;
-      my -= Math.sin(toPlayer) * 70;
-    }
-    g.x = clamp(g.x + mx * dt, 12, world.width - 12);
-    g.y = clamp(g.y + my * dt, 12, world.height - 12);
-    if (g.shootCooldown <= 0 && d < 420) {
-      g.shootCooldown = world.rng.range(0.9, 1.7);
-      const spread = world.rng.range(-0.09, 0.09);
-      const a = toPlayer + spread;
-      world.enemyBullets.push({
-        x: g.x + Math.cos(a) * 18,
-        y: g.y + Math.sin(a) * 18,
-        vx: Math.cos(a) * 520,
-        vy: Math.sin(a) * 520,
-        life: 1.1,
-      });
-      world.burst(g.x + Math.cos(a) * 20, g.y + Math.sin(a) * 20, '#ffe9a8', 2);
-    }
+/** Tick the reload timer; tops the magazine up when it finishes. */
+export function tickWeapon(weapon, dt) {
+  if (weapon.reloading <= 0) return;
+  weapon.reloading -= dt;
+  if (weapon.reloading <= 0) {
+    weapon.reloading = 0;
+    const need = COMBAT.magSize - weapon.mag;
+    const take = Math.min(need, weapon.reserve);
+    weapon.mag += take;
+    weapon.reserve -= take;
   }
 }
 
-// Enemy bullets hurt the player (or the escort van) and die on walls.
-export function updateEnemyBullets(world, dt, hitBuilding) {
-  const p = world.player;
-  for (const b of world.enemyBullets) {
-    const ox = b.x;
-    const oy = b.y;
+/**
+ * Segment-vs-circle test: does the segment (x1,y1)-(x2,y2) pass within
+ * radius r of (cx,cy)? This is the anti-tunnelling check.
+ */
+export function segmentHitsCircle(x1, y1, x2, y2, cx, cy, r) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  let t = 0;
+  if (len2 > 0) {
+    t = ((cx - x1) * dx + (cy - y1) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+  }
+  const nx = x1 + dx * t;
+  const ny = y1 + dy * t;
+  const ox = cx - nx;
+  const oy = cy - ny;
+  return ox * ox + oy * oy <= r * r;
+}
+
+/**
+ * Advance bullets and resolve hits against guards. `targets` are
+ * {x, y, radius, health, alive} objects. Returns the list of targets
+ * whose health hit zero this step.
+ */
+export function updateBullets(bullets, targets, dt) {
+  const killed = [];
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    b.px = b.x;
+    b.py = b.y;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
-    if (hitBuilding(b.x, b.y, 2) || hitBuilding((ox + b.x) / 2, (oy + b.y) / 2, 2)) {
-      b.life = 0;
-      world.burst(b.x, b.y, '#e8e4d8', 3);
-      continue;
-    }
-    if (p.invuln <= 0 && segDist(p.x, p.y, ox, oy, b.x, b.y) < 14) {
-      b.life = 0;
-      p.health -= 9;
-      p.invuln = 0.35;
-      world.burst(p.x, p.y, '#ff9d7d', 6);
-      if (p.health <= 0) world.setWasted();
-    }
-    const van = world.escortVan;
-    if (van && segDist(van.x, van.y, ox, oy, b.x, b.y) < 22) {
-      b.life = 0;
-      van.health -= 4;
-      world.burst(van.x, van.y, '#ffb03a', 3);
-    }
-  }
-  world.enemyBullets = world.enemyBullets.filter((b) => b.life > 0);
-}
-
-// Player bullets vs gangsters. world.updateBullets stashes each round's
-// previous position (b.px, b.py) before moving it, so the hit test covers
-// the whole segment the round travelled this frame.
-export function bulletsVsGangsters(world) {
-  let down = 0;
-  for (const b of world.bullets) {
-    const ox = b.px ?? b.x;
-    const oy = b.py ?? b.y;
-    for (const g of world.gangsters) {
-      if (b.life <= 0) continue;
-      if (segDist(g.x, g.y, ox, oy, b.x, b.y) < 16) {
-        b.life = 0;
-        g.health -= PLAYER.bulletDamage;
-        world.burst(g.x, g.y, '#ff9d7d', 8);
-        if (g.health <= 0) {
-          world.gangsters = world.gangsters.filter((o) => o !== g);
-          world.kills += 1;
-          world.cash += 50;
-          world.flash('Harbor Boy down — $50 off him');
-          down += 1;
+    let dead = b.life <= 0;
+    if (!dead) {
+      for (const t of targets) {
+        if (!t.alive) continue;
+        if (segmentHitsCircle(b.px, b.py, b.x, b.y, t.x, t.y, t.radius)) {
+          t.health -= COMBAT.bulletDamage;
+          if (t.health <= 0) {
+            t.health = 0;
+            t.alive = false;
+            killed.push(t);
+          }
+          dead = true;
+          break;
         }
       }
     }
+    if (dead) bullets.splice(i, 1);
   }
-  return down;
+  return killed;
+}
+
+/** A punch: the nearest living target inside punch range takes damage. */
+export function punch(attackerX, attackerY, angle, targets) {
+  let best = null;
+  let bestD = Infinity;
+  for (const t of targets) {
+    if (!t.alive) continue;
+    const d = Math.hypot(t.x - attackerX, t.y - attackerY);
+    if (d > COMBAT.punchRange) continue;
+    const want = Math.atan2(t.y - attackerY, t.x - attackerX);
+    let diff = want - angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    if (Math.abs(diff) > 1.1) continue;
+    if (d < bestD) {
+      bestD = d;
+      best = t;
+    }
+  }
+  if (!best) return null;
+  best.health -= COMBAT.punchDamage;
+  if (best.health <= 0) {
+    best.health = 0;
+    best.alive = false;
+  }
+  return best;
+}
+
+/** Spawn the finale's guards around SCPD Headquarters. */
+export function spawnGuards(hqX, hqY) {
+  const spots = [
+    { dx: -70, dy: -40 },
+    { dx: 70, dy: -40 },
+    { dx: 0, dy: 70 },
+  ];
+  return spots.map((s, i) => ({
+    id: i,
+    x: hqX + s.dx,
+    y: hqY + s.dy,
+    radius: 16,
+    health: COMBAT.guardHealth,
+    alive: true,
+    angle: Math.PI / 2,
+    shootT: 1 + i * 0.6,
+    wander: i * 2.1,
+  }));
+}
+
+/** Guards shuffle in place and take pot-shots at the player when close. */
+export function updateGuards(guards, px, py, dt, onGuardShot) {
+  for (const g of guards) {
+    if (!g.alive) continue;
+    g.wander += dt;
+    g.x += Math.cos(g.wander) * 6 * dt;
+    g.y += Math.sin(g.wander * 0.7) * 6 * dt;
+    const d = Math.hypot(px - g.x, py - g.y);
+    if (d < 420) {
+      g.angle = Math.atan2(py - g.y, px - g.x);
+      g.shootT -= dt;
+      if (g.shootT <= 0) {
+        g.shootT = 1.4;
+        if (onGuardShot) onGuardShot(g);
+      }
+    }
+  }
+}
+
+/** Health pips for the HUD: one pip per 25 health. */
+export function guardPips(guard) {
+  return Math.ceil(guard.health / 25);
+}
+
+/** An ammo pickup lying on the ground. */
+export function createAmmoPickup(x, y) {
+  return { x, y, amount: COMBAT.ammoPickup, taken: false };
 }

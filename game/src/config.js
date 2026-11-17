@@ -1,223 +1,239 @@
-// config.js — every number, name and story beat in Solmar Heat, in one place.
-// Balance the city, the cars, the police and the seven jobs from here.
-export const CITY = {
-  blocks: 9, // a 9 x 9 grid of blocks, ringed by streets
-  block: 220, // pixels along one block edge
-  road: 46, // street width
-  name: 'SOLMAR',
-  districts: [
-    'Marina', 'Old Port', 'Palm Row', 'Civic Plaza', 'Harborlight',
-    'Sunset Mile', 'Cactus Court', 'The Docks', 'Neon Strip',
-  ],
-};
+// Solmar Heat — every tuning number, name and story beat in one place.
+// The playfield is a fixed 1280x720 logical view; the world itself is a
+// 2440x2440 street grid. Nothing here touches the DOM: it is pure data.
 
+/** The fixed simulation step, in seconds: 60 updates a second whatever the display rate. */
+export const STEP = 1 / 60;
+
+/** The logical view the renderer scales to the window. */
+export const VIEW = { width: 1280, height: 720 };
+
+/** The city: 9 roads each way, evenly spaced, road 8 at x = 2151. */
 export const WORLD = {
-  // Streets sit every `block + road` pixels: 10 roads of 46 px and 9 blocks
-  // of 220 px add up to 2440 px a side, so the farthest road (index 9, centre
-  // 2417) is inside the world. A smaller world cut the grid short and left
-  // the Marina, the Falco and Pier 9 unreachable — missions died there.
-  width: (CITY.blocks + 1) * CITY.road + CITY.blocks * CITY.block,
-  height: (CITY.blocks + 1) * CITY.road + CITY.blocks * CITY.block,
+  size: 2440,
+  roads: 9,
+  roadStart: 103,
+  roadSpacing: 256,
+  roadWidth: 64,
 };
 
-export const PLAYER = {
-  walkSpeed: 170,
-  runSpeed: 260,
-  radius: 10,
-  maxHealth: 100,
-  punchDamage: 12,
-  bulletDamage: 34,
-  magSize: 12,
-  reserveAmmo: 48,
-  reloadSeconds: 1.1,
-};
+/** Road centre coordinate for road index i (0..8), both axes. */
+export function roadAt(i) {
+  return WORLD.roadStart + i * WORLD.roadSpacing;
+}
 
-export const CARS = [
-  { name: 'Sunny', color: '#e8b93c', top: 235, accel: 430, grip: 3.4 },
-  { name: 'Corto', color: '#3f7fd0', top: 260, accel: 500, grip: 3.8 },
-  { name: 'Vela', color: '#c94f6d', top: 285, accel: 560, grip: 4.0 },
-  { name: 'Bruma', color: '#7a5fb0', top: 300, accel: 620, grip: 4.3 },
-  { name: 'Toro GT', color: '#d84a2f', top: 330, accel: 700, grip: 4.6 },
-  { name: 'Palma', color: '#2fae7d', top: 250, accel: 470, grip: 3.6 },
-  { name: 'Dune', color: '#c98a3f', top: 275, accel: 540, grip: 3.9 },
-  { name: 'Falco', color: '#22262e', top: 350, accel: 760, grip: 4.9 },
-  { name: 'Vento', color: '#f5c542', top: 265, accel: 520, grip: 3.9, taxi: true },
-  { name: 'Rumbo', color: '#8a6f4d', top: 255, accel: 480, grip: 4.4 },
+/** The city clamp: the player and cars may roam the whole grid, road 8 included. */
+export function clampToWorld(v) {
+  return Math.max(24, Math.min(WORLD.size - 24, v));
+}
+
+/** District names on a 3x3 map of the city. */
+export const DISTRICTS = [
+  ['Sunset Mile', 'Cactus Court', 'Neon Strip'],
+  ['Palm Row', 'Downtown', 'Harbor Lights'],
+  ['Marina', 'The Yards', 'Pier 9'],
 ];
 
-export const POLICE = {
-  maxStars: 5,
-  chaseSpeed: 300,
-  spawnGap: 3.2,
-  starHeat: [0, 1, 2, 4, 7, 11], // heat points that buy each star
-  decayPerSecond: 0.6,
-  bustRadius: 26,
-  roadblockAtStars: 4, // from 4 stars the SCPD parks a roadblock ahead of you
+/** District name for a world position. */
+export function districtAt(x, y) {
+  const third = WORLD.size / 3;
+  const col = Math.min(2, Math.max(0, Math.floor(x / third)));
+  const row = Math.min(2, Math.max(0, Math.floor(y / third)));
+  return DISTRICTS[row][col];
+}
+
+/** Landmark spots, fixed on the grid (block centres between roads). */
+export const LANDMARKS = {
+  hq: { name: 'SCPD Headquarters', x: 1255, y: 1255, kind: 'hq' },
+  paint: { name: "Lou's Paint Shop", x: 487, y: 1255, kind: 'paint' },
+  marina: { name: 'Marina', x: 487, y: 2023, kind: 'marina' },
+  pier: { name: 'Pier 9', x: 2023, y: 2023, kind: 'pier' },
+  plaza: { name: 'Cactus Court Plaza', x: 1255, y: 487, kind: 'plaza' },
+  hospital: { name: 'Solmar General', x: 1255, y: 2023, kind: 'hospital' },
 };
 
-export const CAR_DAMAGE = {
-  wallHit: 8, // health lost by slamming a building
-  wreckAt: 0, // at 0 the car is totaled and cannot be driven again
-};
+/** The ten stealable car models. The Vento is the city's taxi. */
+export const CAR_MODELS = [
+  { name: 'Falco', color: '#e5484d', taxi: false },
+  { name: 'Vento', color: '#f5c542', taxi: true },
+  { name: 'Comet', color: '#4d7cfe', taxi: false },
+  { name: 'Bison', color: '#5b6770', taxi: false },
+  { name: 'Dune', color: '#d97b2f', taxi: false },
+  { name: 'Sable', color: '#2f2a33', taxi: false },
+  { name: 'Raptor', color: '#3fae6a', taxi: false },
+  { name: 'Lumen', color: '#e8e6df', taxi: false },
+  { name: 'Orca', color: '#7a5cff', taxi: false },
+  { name: 'Pinto', color: '#c65d8f', taxi: false },
+];
 
-export const NEAR_MISS = {
-  pay: 15, // cash for threading past traffic at speed
-  minSpeed: 150,
-  range: 42, // how close the other car must be
-  cooldown: 1.5, // seconds between payouts
-};
+/** The ten hidden Solmar coins, on fixed grid cells. */
+export const COIN_SPOTS = [
+  { x: 103, y: 103 },
+  { x: 2151, y: 103 },
+  { x: 103, y: 2151 },
+  { x: 2151, y: 2151 },
+  { x: 1127, y: 615 },
+  { x: 615, y: 1383 },
+  { x: 1895, y: 871 },
+  { x: 871, y: 1895 },
+  { x: 1383, y: 1639 },
+  { x: 1639, y: 359 },
+];
 
-export const COINS = {
-  pay: 75, // cash per Solmar coin found
-  total: 10,
-  // Fixed road-grid cells, so the set is the same every run and in saves.
-  spots: [
-    [0, 3], [1, 5], [2, 8], [3, 1], [4, 6],
-    [5, 0], [6, 8], [7, 2], [8, 5], [9, 9],
-  ],
-};
+/** A Solmar coin pays this much. */
+export const COIN_VALUE = 75;
 
+/** Ranks by story jobs completed (0..7). Rank 6 is Street Royalty, rank 7 Solmar Legend. */
+export const RANKS = [
+  'Nobody',
+  'Small Timer',
+  'Wheelman',
+  'King of the Mile',
+  'Heat Magnet',
+  'Solmar Outlaw',
+  'Street Royalty',
+  'Solmar Legend',
+];
+
+/** The seven story jobs: Lena Voss, the player, and the crime boss Kane. */
 export const MISSIONS = [
   {
-    id: 'm1',
-    title: 'The First Key',
-    giver: 'Lena Voss',
-    brief: 'Lena needs a ride across town. Steal any car, pick her up at Palm Row, and drop her at the Marina — the port guards are watching.',
-    objective: 'Pick up Lena, then reach the Marina marker.',
-    reward: 400,
+    id: 1,
+    title: 'First Wheels',
+    brief: 'Steal any car and bring it to Lena at Cactus Court Plaza.',
+    banner: 'Steal a car and drive it to Lena at Cactus Court Plaza.',
+    payout: 250,
+    timer: 0,
+    startStars: 0,
   },
   {
-    id: 'm2',
-    title: 'Hot Wheels',
-    giver: 'Marco Sol',
-    brief: 'Marco wants the Falco — the black coupe parked by Neon Strip. Take it, lose the cops, and bring it to the garage on Sunset Mile.',
-    objective: 'Steal the black Falco and deliver it to the Sunset garage.',
-    reward: 900,
-  },
-  {
-    id: 'm3',
-    title: 'Solmar Nights',
-    giver: 'Lena Voss',
-    brief: 'The crew is moving a shipment through the Docks at midnight. Escort the van, keep the police off it, and get it to the Old Port warehouse.',
-    objective: 'Escort the van to the Old Port warehouse. Keep it alive.',
-    reward: 1500,
-  },
-  {
-    id: 'm4',
-    title: 'The Palms Package',
-    giver: 'Mama Lou',
-    brief: 'A package is waiting at The Palms Motel. Pick it up, but the Harbor Boys are watching the motel — expect an ambush and a 2-star tail. Bring the package to Lou’s Paint Shop.',
-    objective: 'Grab the package at the motel, survive the ambush, deliver it to the paint shop.',
-    reward: 1100,
-  },
-  {
-    id: 'm5',
-    title: 'The Solmar Vault',
-    giver: 'Mama Lou',
-    brief: 'The National Bank vault holds the crew’s future. Crack it: clear the Harbor Boys guarding the vault, grab the cash, then shake the 3-star manhunt and reach Pier 9.',
-    objective: 'Clear the vault guards, take the cash, escape to Pier 9.',
-    reward: 2500,
-  },
-  {
-    id: 'm6',
-    title: 'Pier 9 Getaway',
-    giver: 'Lena Voss',
-    brief: 'Detective Kane has the whole SCPD on the streets and the clock is running. Drive to Pier 9 before the timer dies — every star on your tail wants you in a cell, not on a boat.',
-    objective: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
-    reward: 3000,
+    id: 2,
+    title: 'The Escort',
+    brief: 'Pick Lena up at the plaza and drive her to the Neon Strip hotel before the clock runs out.',
+    banner: 'Drive Lena to the Neon Strip hotel before the timer runs out.',
+    payout: 400,
     timer: 75,
+    startStars: 0,
   },
   {
-    id: 'm7',
-    title: 'The Last Ledger',
-    giver: 'Mama Lou',
-    brief: 'Kane kept a ledger of everything the crew ever did — names, dates, plates. It sits in the SCPD headquarters under guard. Take it back: clear the guards, grab the ledger, then outrun a 4-star manhunt to the Marina before the timer dies.',
-    objective: 'Clear the HQ guards, take the ledger, escape to the Marina in 90 seconds.',
-    reward: 4000,
+    id: 3,
+    title: 'The Lift',
+    brief: 'Lift the Vento taxi from the Marina lot and deliver it to Lou’s Paint Shop.',
+    banner: 'Steal the Vento taxi at the Marina and deliver it to Lou’s Paint Shop.',
+    payout: 500,
     timer: 90,
+    startStars: 1,
+  },
+  {
+    id: 4,
+    title: 'Hot Pursuit',
+    brief: 'Chase down Kane’s courier in the Comet, ram it three times to stop it, grab the package.',
+    banner: 'Ram the courier’s Comet three times, then grab the package.',
+    payout: 700,
+    timer: 120,
+    startStars: 2,
+  },
+  {
+    id: 5,
+    title: 'The Setup',
+    brief: 'Carry the rigged package to Pier 9 while the heat is on. Two stars from the start.',
+    banner: 'Deliver the package to Pier 9. 2 stars from the start.',
+    payout: 900,
+    timer: 90,
+    startStars: 2,
+  },
+  {
+    id: 6,
+    title: 'Pier 9 Getaway — Lena Voss',
+    brief: 'Lena is cornered at the Marina. Reach Pier 9 before the timer runs out.',
+    banner: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
+    payout: 1200,
+    timer: 60,
+    startStars: 3,
+  },
+  {
+    id: 7,
+    title: 'The Last Ledger',
+    brief: 'Steal Kane’s ledger from SCPD Headquarters: clear 3 guards, grab the ledger, then escape to the Marina in 90 seconds under a 4-star manhunt.',
+    banner: 'Clear the guards, grab Kane’s ledger, escape to the Marina in 90 seconds.',
+    payout: 4000,
+    timer: 90,
+    startStars: 4,
   },
 ];
 
-// Named places on the Solmar map. Each is a road-grid cell [i, j]; the
-// renderer draws its label and the minimap draws its glyph.
-export const LANDMARKS = [
-  { id: 'bank', name: 'NATIONAL BANK', kind: 'bank', i: 6, j: 2, note: 'The Solmar Vault — job 5' },
-  { id: 'hospital', name: 'SOLMAR GENERAL', kind: 'hospital', i: 2, j: 7, note: 'You wake up here when WASTED' },
-  { id: 'paint', name: 'LOU’S PAINT SHOP', kind: 'paint', i: 6, j: 5, note: 'New paint, $200 — the heat forgets you' },
-  { id: 'motel', name: 'THE PALMS MOTEL', kind: 'motel', i: 1, j: 6, note: 'The package waits here — job 4' },
-  { id: 'pier', name: 'PIER 9', kind: 'pier', i: 8, j: 1, note: 'The getaway boat — job 6' },
-  { id: 'docks', name: 'THE DOCKS', kind: 'docks', i: 1, j: 8, note: 'The crew’s midnight shipment' },
-  { id: 'plaza', name: 'CIVIC PLAZA', kind: 'plaza', i: 4, j: 4, note: 'Where the busted get dropped' },
-  { id: 'hq', name: 'SCPD HEADQUARTERS', kind: 'hq', i: 7, j: 3, note: 'Kane’s ledger — job 7' },
-];
+/** Guard drops in the finale add this each, so job 7 takes $4,150 in all. */
+export const GUARD_DROP = 50;
 
-export const STORY = {
-  intro: [
-    'SOLMAR — a sun-soaked port city where the tide brings money and trouble in equal measure.',
-    'You are REX MARLOWE, a wheelman with a debt to pay and a city to learn.',
-    'Mama Lou runs the quiet jobs. Lena Voss runs the loud ones. Detective Kane runs the police.',
-    'Steal a car. Earn the crew. Own the night.',
-  ],
-  outro: 'The van made it. The crew is paid. Solmar is yours — for now.',
-  finale: [
-    'The ledger burns on the boat at Pier 9. Kane has nothing left on the crew.',
-    'Mama Lou counts the vault cash. Lena guns the engine.',
-    'Seven jobs. One city. Rex Marlowe owns the night.',
-  ],
+/** On-foot tuning. */
+export const PLAYER = {
+  radius: 14,
+  walk: 175,
+  sprint: 265,
+  health: 100,
 };
 
-// Rank names the HUD shows as the player’s standing grows with jobs done.
-export const RANKS = [
-  { at: 0, name: 'WHEELMAN' },
-  { at: 1, name: 'CREW DRIVER' },
-  { at: 3, name: 'SOLMAR FIXER' },
-  { at: 5, name: 'KING OF THE MILE' },
-  { at: 6, name: 'STREET ROYALTY' },
-  { at: 7, name: 'SOLMAR LEGEND' },
-];
-
-export const TAXI = {
-  fareBase: 60,
-  farePerPixel: 0.12,
-  maxFare: 420,
+/** Driving tuning. */
+export const CAR = {
+  accel: 300,
+  brake: 620,
+  maxSpeed: 430,
+  reverseMax: 150,
+  turnRate: 2.7,
+  handbrakeTurn: 1.6,
+  drag: 0.35,
+  wallDamage: 8,
+  health: 100,
 };
 
-export const PAINT_SHOP = {
-  cost: 200,
-  radius: 70,
+/** Wanted tuning: heat 0..100, a star every 20 heat. */
+export const WANTED = {
+  maxHeat: 100,
+  perStar: 20,
+  stealHeat: 20,
+  shotHeat: 3,
+  guardHeat: 10,
+  decayPerSec: 1.5,
+  calmSeconds: 4,
+  /** A star gained lands mid-band, never on a boundary that decays back next frame. */
+  midBand: 10,
 };
 
-export const CONTROLS = {
-  up: ['KeyW', 'ArrowUp'],
-  down: ['KeyS', 'ArrowDown'],
-  left: ['KeyA', 'ArrowLeft'],
-  right: ['KeyD', 'ArrowRight'],
-  enterCar: 'KeyE',
-  exitCar: 'KeyE',
-  punch: 'KeyF',
-  shoot: 'Mouse0',
-  sprint: 'ShiftLeft',
-  pause: 'KeyP',
-  mute: 'KeyM',
-  reload: 'KeyR',
-  handbrake: 'Space',
-  taxi: 'KeyT',
+/** Combat tuning. */
+export const COMBAT = {
+  magSize: 12,
+  reserveStart: 48,
+  reloadSeconds: 1.1,
+  bulletSpeed: 900,
+  bulletDamage: 34,
+  punchDamage: 20,
+  punchRange: 36,
+  guardHealth: 100,
+  ammoPickup: 24,
 };
 
+/** Taxi fares pay around this much. */
+export const FARE_PAY = 310;
+
+/** Near-miss bonus: threading past traffic at speed over this, with this cooldown. */
+export const NEAR_MISS = { speed: 150, payout: 15, cooldown: 1.5, gap: 48 };
+
+/** The palette: sun-soaked Solmar. */
 export const COLORS = {
-  sky: '#ffd9a0',
-  sand: '#f2d8a7',
-  asphalt: '#3a3f47',
-  asphaltEdge: '#2c3038',
-  lane: '#e8e4d8',
-  sidewalk: '#cbb98f',
-  building: ['#b98a5e', '#8fa3b8', '#c9a86a', '#7d8b6f', '#a8705a', '#6f7f96'],
-  palm: '#2f7d4f',
-  water: '#3f9db5',
-  hud: '#f5eeda',
-  danger: '#e0453a',
-  gold: '#f0c040',
+  grass: '#7fae5a',
+  park: '#6da34e',
+  road: '#3c3f46',
+  roadEdge: '#2c2e33',
+  lane: '#e8d44d',
+  sidewalk: '#b9b3a4',
+  building: '#c98d5f',
+  building2: '#8fa3b8',
+  building3: '#d9c08a',
+  water: '#3f8fb5',
+  sand: '#e3cf9e',
+  hud: '#101318',
+  accent: '#ffb02e',
+  star: '#ffd23e',
+  danger: '#ff4d4d',
+  good: '#58d68d',
 };
-
-export const SAVE_KEY = 'solmar-heat-save-v1';
-export const SEED_DEFAULT = 2026;

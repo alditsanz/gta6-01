@@ -1,986 +1,301 @@
-// world.js — the city of Solmar and everything that lives in it.
-// Builds the 9x9 street grid, its buildings, traffic, pedestrians, police,
-// the seven story missions, the Solmar coins and the near-miss payouts, and
-// steps the whole simulation forward one frame at a time.
-import { CITY, WORLD, PLAYER, CARS, POLICE, MISSIONS, COLORS, CONTROLS, SAVE_KEY, RANKS, CAR_DAMAGE, NEAR_MISS } from './config.js';
-import { makeRng, clamp, dist, angleTo, wrapAngle, segDist } from './random.js';
-import { buildLandmarks, landmarkById } from './landmarks.js';
-import { createAmmo, startReload, tickReload, tryFire, spawnGangsters, updateGangsters, updateEnemyBullets, bulletsVsGangsters } from './combat.js';
-import { createSideJobs, startFare, updateFare, checkPaintShop, spawnCashBag, checkCashBags } from './sidejobs.js';
-import { buildCoins, checkCoins, applyCoinSave, takenCoinIndices } from './collectibles.js';
+// The city of Solmar: a 9x9 street grid, buildings, parks, traffic,
+// pedestrians, parked cars and the police pursuit graph. Pure data and
+// movement math — nothing here touches the DOM or the canvas.
 
-const BLOCK = CITY.block;
-const ROAD = CITY.road;
-const PITCH = BLOCK + ROAD;
+import { WORLD, roadAt, clampToWorld, CAR_MODELS, COLORS } from './config.js';
+import { range, int, pick, chance } from './random.js';
 
-export function roadCenter(i) {
-  return ROAD / 2 + i * PITCH;
+/** Is (x, y) on a road (within half the road width of a road centre)? */
+export function onRoad(x, y) {
+  const half = WORLD.roadWidth / 2;
+  for (let i = 0; i < WORLD.roads; i++) {
+    const r = roadAt(i);
+    if (Math.abs(x - r) <= half || Math.abs(y - r) <= half) return true;
+  }
+  return false;
 }
 
-export function isOnRoad(x, y) {
-  const gx = ((x % PITCH) + PITCH) % PITCH;
-  const gy = ((y % PITCH) + PITCH) % PITCH;
-  return gx < ROAD || gy < ROAD;
-}
-
-export function nearestRoadPoint(x, y) {
-  const gx = ((x % PITCH) + PITCH) % PITCH;
-  const gy = ((y % PITCH) + PITCH) % PITCH;
-  if (gx < ROAD) return { x, y, along: 'x' };
-  if (gy < ROAD) return { x, y, along: 'y' };
-  const dx = gx < PITCH / 2 ? gx : gx - PITCH;
-  const dy = gy < PITCH / 2 ? gy : gy - PITCH;
-  if (Math.abs(dx) < Math.abs(dy)) return { x: x - dx, y, along: 'x' };
-  return { x, y: y - dy, along: 'y' };
-}
-
-// Breadth-first search over the road graph: police and the escort van
-// follow the streets, never through walls.
-export function bfsPath(sx, sy, tx, ty) {
-  const n = CITY.blocks + 1;
-  const key = (i, j) => i * n + j;
-  const startI = clamp(Math.round((sx - ROAD / 2) / PITCH), 0, n - 1);
-  const startJ = clamp(Math.round((sy - ROAD / 2) / PITCH), 0, n - 1);
-  const goalI = clamp(Math.round((tx - ROAD / 2) / PITCH), 0, n - 1);
-  const goalJ = clamp(Math.round((ty - ROAD / 2) / PITCH), 0, n - 1);
-  const prev = new Map();
-  const queue = [key(startI, startJ)];
-  prev.set(key(startI, startJ), -1);
-  while (queue.length) {
-    const cur = queue.shift();
-    const ci = Math.floor(cur / n);
-    const cj = cur % n;
-    if (ci === goalI && cj === goalJ) break;
-    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const ni = ci + di;
-      const nj = cj + dj;
-      if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-      const nk = key(ni, nj);
-      if (prev.has(nk)) continue;
-      prev.set(nk, cur);
-      queue.push(nk);
+/** Nearest road index to a coordinate on one axis. */
+export function nearestRoadIndex(v) {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < WORLD.roads; i++) {
+    const d = Math.abs(v - roadAt(i));
+    if (d < bestD) {
+      bestD = d;
+      best = i;
     }
   }
-  const path = [];
-  let cur = key(goalI, goalJ);
-  if (!prev.has(cur)) return [{ x: roadCenter(goalI), y: roadCenter(goalJ) }];
-  while (cur !== -1) {
-    path.unshift({ x: roadCenter(Math.floor(cur / n)), y: roadCenter(cur % n) });
-    cur = prev.get(cur);
-  }
-  return path;
+  return best;
 }
 
-function buildCity(rng) {
+/**
+ * Breadth-first path over the road grid from road cell (ax, ay) to
+ * (bx, by). Police follow it intersection by intersection, so a pursuit
+ * never cuts through buildings.
+ */
+export function gridPath(ax, ay, bx, by) {
+  const key = (x, y) => y * WORLD.roads + x;
+  const prev = new Map();
+  const seen = new Set([key(ax, ay)]);
+  const queue = [[ax, ay]];
+  while (queue.length > 0) {
+    const [x, y] = queue.shift();
+    if (x === bx && y === by) {
+      const path = [];
+      let cur = key(x, y);
+      let cx = x;
+      let cy = y;
+      while (cur !== key(ax, ay)) {
+        path.unshift([cx, cy]);
+        const p = prev.get(cur);
+        cx = p[0];
+        cy = p[1];
+        cur = key(cx, cy);
+      }
+      return path;
+    }
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= WORLD.roads || ny >= WORLD.roads) continue;
+      const k = key(nx, ny);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prev.set(k, [x, y]);
+      queue.push([nx, ny]);
+    }
+  }
+  return [[bx, by]];
+}
+
+/** Build the static city: buildings, parks and trees, from the seed. */
+export function buildCity(rng) {
   const buildings = [];
-  const palms = [];
+  const trees = [];
   const parks = [];
-  for (let bx = 0; bx < CITY.blocks; bx++) {
-    for (let by = 0; by < CITY.blocks; by++) {
-      const x0 = ROAD + bx * PITCH;
-      const y0 = ROAD + by * PITCH;
-      const district = CITY.districts[(bx + by) % CITY.districts.length];
-      if (rng.chance(0.14)) {
-        parks.push({ x: x0, y: y0, w: BLOCK, h: BLOCK, district });
-        for (let p = 0; p < 5; p++) {
-          palms.push({ x: x0 + rng.range(20, BLOCK - 20), y: y0 + rng.range(20, BLOCK - 20) });
+  for (let cx = 0; cx < WORLD.roads - 1; cx++) {
+    for (let cy = 0; cy < WORLD.roads - 1; cy++) {
+      const x0 = roadAt(cx) + WORLD.roadWidth / 2 + 8;
+      const x1 = roadAt(cx + 1) - WORLD.roadWidth / 2 - 8;
+      const y0 = roadAt(cy) + WORLD.roadWidth / 2 + 8;
+      const y1 = roadAt(cy + 1) - WORLD.roadWidth / 2 - 8;
+      const bx = (x0 + x1) / 2;
+      const by = (y0 + y1) / 2;
+      // One in five blocks is a park; the rest hold one or two buildings.
+      if (chance(rng, 0.2)) {
+        parks.push({ x: bx, y: by, w: x1 - x0, h: y1 - y0 });
+        const n = int(rng, 4, 8);
+        for (let i = 0; i < n; i++) {
+          trees.push({ x: range(rng, x0 + 14, x1 - 14), y: range(rng, y0 + 14, y1 - 14), r: range(rng, 7, 12) });
         }
         continue;
       }
-      const count = rng.int(1, 3);
-      for (let b = 0; b < count; b++) {
-        const w = rng.range(50, 90);
-        const h = rng.range(50, 90);
-        const x = x0 + rng.range(8, BLOCK - w - 8);
-        const y = y0 + rng.range(8, BLOCK - h - 8);
+      const w = range(rng, 60, Math.min(150, x1 - x0 - 20));
+      const h = range(rng, 60, Math.min(150, y1 - y0 - 20));
+      buildings.push({
+        x: bx + range(rng, -8, 8),
+        y: by + range(rng, -8, 8),
+        w,
+        h,
+        color: pick(rng, [COLORS.building, COLORS.building2, COLORS.building3]),
+        roof: pick(rng, ['#a5673f', '#5f7488', '#b39a5e', '#7d8a96']),
+      });
+      if (chance(rng, 0.45)) {
         buildings.push({
-          x, y, w, h,
-          color: rng.pick(COLORS.building),
-          floors: rng.int(2, 9),
-          district,
-          roof: rng.pick(['flat', 'pool', 'garden']),
+          x: bx + range(rng, -40, 40),
+          y: by + range(rng, -40, 40),
+          w: range(rng, 40, 70),
+          h: range(rng, 40, 70),
+          color: pick(rng, [COLORS.building, COLORS.building2, COLORS.building3]),
+          roof: pick(rng, ['#a5673f', '#5f7488', '#b39a5e']),
         });
       }
-      if (rng.chance(0.6)) {
-        palms.push({ x: x0 + rng.range(14, BLOCK - 14), y: y0 + rng.range(14, BLOCK - 14) });
+      const n = int(rng, 0, 3);
+      for (let i = 0; i < n; i++) {
+        trees.push({ x: range(rng, x0 + 10, x1 - 10), y: range(rng, y0 + 10, y1 - 10), r: range(rng, 6, 10) });
       }
     }
   }
-  return { buildings, palms, parks };
+  return { buildings, trees, parks };
 }
 
-function circleHitsBuilding(buildings, x, y, r) {
-  for (const b of buildings) {
-    if (x + r > b.x && x - r < b.x + b.w && y + r > b.y && y - r < b.y + b.h) return b;
+/** Does a circle at (x, y) with radius r hit any building? */
+export function hitsBuilding(city, x, y, r) {
+  for (const b of city.buildings) {
+    const cx = Math.max(b.x - b.w / 2, Math.min(x, b.x + b.w / 2));
+    const cy = Math.max(b.y - b.h / 2, Math.min(y, b.y + b.h / 2));
+    const dx = x - cx;
+    const dy = y - cy;
+    if (dx * dx + dy * dy < r * r) return b;
   }
   return null;
 }
 
-export class World {
-  constructor(seed = 2026) {
-    this.seed = seed;
-    this.rng = makeRng(seed);
-    const city = buildCity(this.rng);
-    this.buildings = city.buildings;
-    this.palms = city.palms;
-    this.parks = city.parks;
-    this.time = 0;
-    this.cash = 0;
-    this.wanted = 0;
-    this.heat = 0;
-    this.timeOfDay = 0.42; // late afternoon sun
-    this.missionIndex = 0;
-    this.mission = null;
-    this.missionState = 'idle'; // idle | active | done | failed
-    this.missionMessage = '';
-    this.message = '';
-    this.messageTimer = 0;
-    this.policeTimer = 0;
-    this.kills = 0;
-    this.carsStolen = 0;
-    this.shotsFired = 0;
-    this.width = WORLD.width;
-    this.height = WORLD.height;
-    this.ammo = createAmmo();
-    this.gangsters = [];
-    this.enemyBullets = [];
-    this.landmarks = buildLandmarks();
-    this.side = createSideJobs();
-    this.coins = buildCoins();
-    this.faresDone = 0;
-    this.paintJobs = 0;
-    this.nearMisses = 0;
-    this.nearMissCooldown = 0;
-    this.roadblockSpawned = false;
-    this.wasted = false;
-    this.storyComplete = false;
-    this.missionTimer = 0;
-
-    const cx = roadCenter(4);
-    const cy = roadCenter(4);
-    this.player = {
-      x: cx, y: cy, angle: -Math.PI / 2, speed: 0,
-      health: PLAYER.maxHealth, onFoot: true, car: null,
-      punchCooldown: 0, shootCooldown: 0, invuln: 0,
-    };
-    this.cars = [];
-    this.traffic = [];
-    this.pedestrians = [];
-    this.police = [];
-    this.bullets = [];
-    this.particles = [];
-    this.pickups = [];
-    this.escortVan = null;
-    this.spawnTraffic();
-    this.spawnPedestrians();
-    this.spawnParkedCars();
-    this.spawnPickups();
-  }
-
-  rankName() {
-    let name = RANKS[0].name;
-    for (const r of RANKS) {
-      if (this.missionIndex >= r.at) name = r.name;
+/** Parked, stealable cars scattered around the city. */
+export function spawnParkedCars(rng) {
+  const cars = [];
+  const spots = [];
+  for (let i = 0; i < WORLD.roads; i++) {
+    for (let j = 0; j < WORLD.roads; j++) {
+      spots.push([roadAt(i), roadAt(j)]);
     }
-    return name;
   }
-
-  // The district the player is standing in, from the block grid.
-  districtName() {
-    const bx = clamp(Math.floor((this.player.x - ROAD) / PITCH), 0, CITY.blocks - 1);
-    const by = clamp(Math.floor((this.player.y - ROAD) / PITCH), 0, CITY.blocks - 1);
-    return CITY.districts[(bx + by) % CITY.districts.length];
+  // Shuffle the intersections and take ten, one per model.
+  for (let i = spots.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = spots[i];
+    spots[i] = spots[j];
+    spots[j] = t;
   }
-
-  startTaxiFare() {
-    return startFare(this);
-  }
-
-  // ---- spawning ------------------------------------------------------------
-  spawnParkedCars() {
-    const spots = [
-      [roadCenter(2), roadCenter(5) + 30, 0],
-      [roadCenter(6), roadCenter(3) - 30, 1],
-      [roadCenter(8), roadCenter(8) + 30, 7],
-      [roadCenter(1), roadCenter(7) - 30, 2],
-      [roadCenter(5), roadCenter(1) + 30, 3],
-      [roadCenter(7), roadCenter(6) - 30, 4],
-      [roadCenter(3), roadCenter(2) + 30, 5],
-      [roadCenter(4), roadCenter(8) - 30, 6],
-      [roadCenter(6), roadCenter(5) + 30, 8],
-      [roadCenter(2), roadCenter(8) - 30, 9],
-    ];
-    spots.forEach(([x, y, def], i) => {
-      const c = CARS[def];
-      this.cars.push({
-        id: `parked-${i}`, def, name: c.name, color: c.color,
-        x, y, angle: this.rng.chance(0.5) ? 0 : Math.PI / 2,
-        speed: 0, parked: true, stolen: false, health: 100, wrecked: false,
-      });
+  for (let k = 0; k < CAR_MODELS.length; k++) {
+    const [ix, iy] = spots[k];
+    const model = CAR_MODELS[k];
+    const alongX = chance(rng, 0.5);
+    const off = range(rng, -60, 60);
+    cars.push({
+      id: k + 1,
+      model: model.name,
+      color: model.color,
+      taxi: model.taxi,
+      x: alongX ? ix + off : ix + (chance(rng, 0.5) ? 26 : -26),
+      y: alongX ? iy + (chance(rng, 0.5) ? 26 : -26) : iy + off,
+      angle: alongX ? (chance(rng, 0.5) ? 0 : Math.PI) : (chance(rng, 0.5) ? Math.PI / 2 : -Math.PI / 2),
+      speed: 0,
+      health: 100,
+      wrecked: false,
+      stolen: false,
+      driver: null,
     });
   }
+  return cars;
+}
 
-  spawnTraffic() {
-    for (let i = 0; i < 16; i++) {
-      const horizontal = this.rng.chance(0.5);
-      const lane = this.rng.int(0, CITY.blocks);
-      const along = this.rng.range(0, WORLD.width);
-      const def = this.rng.int(0, CARS.length - 1);
-      const c = CARS[def];
-      this.traffic.push({
-        id: `traffic-${i}`, def, name: c.name, color: c.color,
-        x: horizontal ? along : roadCenter(lane) + (this.rng.chance(0.5) ? 10 : -10),
-        y: horizontal ? roadCenter(lane) + (this.rng.chance(0.5) ? 10 : -10) : along,
-        angle: horizontal ? (this.rng.chance(0.5) ? 0 : Math.PI) : (this.rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2),
-        speed: this.rng.range(90, 150),
-        cruise: this.rng.range(90, 150),
-      });
-    }
-  }
-
-  spawnPedestrians() {
-    for (let i = 0; i < 26; i++) {
-      const bx = this.rng.int(0, CITY.blocks - 1);
-      const by = this.rng.int(0, CITY.blocks - 1);
-      this.pedestrians.push({
-        id: `ped-${i}`,
-        x: ROAD + bx * PITCH + this.rng.range(20, BLOCK - 20),
-        y: ROAD + by * PITCH + this.rng.range(20, BLOCK - 20),
-        angle: this.rng.range(0, Math.PI * 2),
-        speed: this.rng.range(22, 48),
-        color: this.rng.pick(['#e8e0c8', '#d0a060', '#7fb0d0', '#c07070', '#90c090', '#d0d0d0']),
-        walkPhase: this.rng.range(0, 6),
-        panic: 0,
-      });
-    }
-  }
-
-  spawnPickups() {
-    const spots = [[roadCenter(1), roadCenter(2)], [roadCenter(8), roadCenter(4)], [roadCenter(5), roadCenter(7)]];
-    for (const [x, y] of spots) {
-      this.pickups.push({ x, y, kind: 'health', taken: false });
-    }
-    this.pickups.push({ x: roadCenter(3), y: roadCenter(6), kind: 'cash', amount: 150, taken: false });
-    this.pickups.push({ x: roadCenter(7), y: roadCenter(2), kind: 'cash', amount: 250, taken: false });
-    this.pickups.push({ x: roadCenter(2), y: roadCenter(5), kind: 'ammo', amount: 24, taken: false });
-    this.pickups.push({ x: roadCenter(6), y: roadCenter(8), kind: 'ammo', amount: 24, taken: false });
-    spawnCashBag(this, roadCenter(8), roadCenter(3), 120);
-    spawnCashBag(this, roadCenter(1), roadCenter(5), 200);
-  }
-
-  // ---- wanted --------------------------------------------------------------
-  addHeat(points, reason) {
-    this.heat += points;
-    const stars = Math.min(POLICE.maxStars, Math.floor(this.heat / 4));
-    if (stars > this.wanted) {
-      // Land mid-band (stars*4 + 2) so a single frame of heat decay cannot
-      // drop the brand-new star again: 16 heat is exactly the 4-star line,
-      // and without this the 4-star manhunt in job 7 degraded to 3 stars
-      // on the very next frame.
-      this.heat = Math.max(this.heat, stars * 4 + 2);
-      this.wanted = stars;
-      this.flash(`${reason} — WANTED LEVEL ${stars}`);
-    }
-  }
-
-  flash(text) {
-    this.message = text;
-    this.messageTimer = 3.2;
-  }
-
-  spawnPolice() {
-    if (this.wanted === 0 || this.police.length >= this.wanted + 1) return;
-    const p = this.player;
-    const angle = this.rng.range(0, Math.PI * 2);
-    const x = clamp(p.x + Math.cos(angle) * 620, 30, WORLD.width - 30);
-    const y = clamp(p.y + Math.sin(angle) * 620, 30, WORLD.height - 30);
-    const near = nearestRoadPoint(x, y);
-    this.police.push({
-      id: `cop-${this.time.toFixed(0)}-${this.police.length}`,
-      x: near.x, y: near.y, angle: 0, speed: 0, block: false,
-      path: [], pathIndex: 0, repath: 0, sirenPhase: this.rng.range(0, 6),
+/** Moving traffic cars that cruise the roads. */
+export function spawnTraffic(rng, count) {
+  const cars = [];
+  for (let i = 0; i < count; i++) {
+    const horizontal = chance(rng, 0.5);
+    const road = int(rng, 0, WORLD.roads - 1);
+    const dir = chance(rng, 0.5) ? 1 : -1;
+    const lane = dir > 0 ? 16 : -16;
+    const along = range(rng, 0, WORLD.size);
+    cars.push({
+      x: horizontal ? along : roadAt(road) + lane,
+      y: horizontal ? roadAt(road) + lane : along,
+      angle: horizontal ? (dir > 0 ? 0 : Math.PI) : (dir > 0 ? Math.PI / 2 : -Math.PI / 2),
+      speed: range(rng, 90, 170),
+      color: pick(rng, ['#c65d5d', '#5d7dc6', '#c6b25d', '#5dc68a', '#8a5dc6', '#c9c9c9']),
+      horizontal,
+      road,
+      dir,
+      wait: 0,
     });
   }
+  return cars;
+}
 
-  // From 4 stars the SCPD parks two cruisers across the road ahead of the
-  // player: a roadblock to drive around or smash through. It stands until
-  // the heat drops below 4 stars.
-  spawnRoadblock() {
-    if (this.roadblockSpawned) return;
-    this.roadblockSpawned = true;
-    const p = this.player;
-    const ahead = nearestRoadPoint(
-      p.x + Math.cos(p.angle) * 260,
-      p.y + Math.sin(p.angle) * 260,
-    );
-    for (let i = 0; i < 2; i++) {
-      const off = i === 0 ? -26 : 26;
-      const x = ahead.along === 'x' ? ahead.x : ahead.x + off;
-      const y = ahead.along === 'x' ? ahead.y + off : ahead.y;
-      this.police.push({
-        id: `block-${i}-${this.time.toFixed(0)}`,
-        x: clamp(x, 30, WORLD.width - 30),
-        y: clamp(y, 30, WORLD.height - 30),
-        angle: p.angle + Math.PI / 2, speed: 0, block: true,
-        path: [], pathIndex: 0, repath: 0, sirenPhase: i * 2,
-      });
+/** Pedestrians strolling the sidewalks. */
+export function spawnPedestrians(rng, count) {
+  const peds = [];
+  for (let i = 0; i < count; i++) {
+    const road = int(rng, 0, WORLD.roads - 1);
+    const horizontal = chance(rng, 0.5);
+    const side = chance(rng, 0.5) ? 40 : -40;
+    const along = range(rng, 0, WORLD.size);
+    peds.push({
+      x: horizontal ? along : roadAt(road) + side,
+      y: horizontal ? roadAt(road) + side : along,
+      angle: horizontal ? (chance(rng, 0.5) ? 0 : Math.PI) : (chance(rng, 0.5) ? Math.PI / 2 : -Math.PI / 2),
+      speed: range(rng, 22, 48),
+      color: pick(rng, ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#1abc9c', '#e67e22']),
+      walkPhase: range(rng, 0, Math.PI * 2),
+      fare: false,
+    });
+  }
+  return peds;
+}
+
+/** Advance traffic along its road; wrap around the far edge. */
+export function updateTraffic(traffic, dt) {
+  for (const t of traffic) {
+    if (t.wait > 0) {
+      t.wait -= dt;
+      continue;
     }
-    this.flash('SCPD ROADBLOCK AHEAD — go around or through!');
+    if (t.horizontal) t.x += Math.cos(t.angle) * t.speed * dt;
+    else t.y += Math.sin(t.angle) * t.speed * dt;
+    if (t.x < -40) t.x = WORLD.size + 40;
+    if (t.x > WORLD.size + 40) t.x = -40;
+    if (t.y < -40) t.y = WORLD.size + 40;
+    if (t.y > WORLD.size + 40) t.y = -40;
   }
+}
 
-  clearRoadblock() {
-    if (!this.roadblockSpawned) return;
-    this.roadblockSpawned = false;
-    this.police = this.police.filter((c) => !c.block);
-  }
-
-  // ---- missions ------------------------------------------------------------
-  startMission(index) {
-    const def = MISSIONS[index];
-    if (!def) return false;
-    this.missionIndex = index;
-    this.mission = def;
-    this.missionState = 'active';
-    this.missionMessage = def.brief;
-    this.flash(`MISSION: ${def.title} — ${def.giver}`);
-    if (def.id === 'm1') {
-      this.missionTarget = { x: roadCenter(2), y: roadCenter(2), label: 'PICK UP LENA' };
-      this.missionStage = 'pickup';
-    } else if (def.id === 'm2') {
-      const falco = this.cars.find((c) => c.def === 7);
-      if (falco) { falco.x = roadCenter(8); falco.y = roadCenter(6) + 30; falco.parked = true; }
-      this.missionTarget = { x: roadCenter(8), y: roadCenter(6), label: 'STEAL THE FALCO' };
-      this.missionStage = 'steal';
-    } else if (def.id === 'm4') {
-      const motel = landmarkById(this.landmarks, 'motel');
-      this.missionTarget = { x: motel.x, y: motel.y, label: 'THE PALMS MOTEL' };
-      this.missionStage = 'pickup';
-    } else if (def.id === 'm5') {
-      const bank = landmarkById(this.landmarks, 'bank');
-      spawnGangsters(this, bank.x, bank.y, 4, 'vault');
-      this.missionTarget = { x: bank.x, y: bank.y, label: 'NATIONAL BANK VAULT' };
-      this.missionStage = 'clear';
-      this.flash('Four Harbor Boys guard the vault — clear them out');
-    } else if (def.id === 'm6') {
-      const pier = landmarkById(this.landmarks, 'pier');
-      this.missionTarget = { x: pier.x, y: pier.y, label: 'PIER 9 — GETAWAY BOAT' };
-      this.missionStage = 'drive';
-      this.missionTimer = def.timer || 75;
-      this.addHeat(14, 'Detective Kane put the whole SCPD on you');
-    } else if (def.id === 'm7') {
-      const hq = landmarkById(this.landmarks, 'hq');
-      spawnGangsters(this, hq.x, hq.y, 3, 'hq');
-      this.missionTarget = { x: hq.x, y: hq.y, label: 'SCPD HEADQUARTERS' };
-      this.missionStage = 'clear';
-      this.flash('Three guards on the ledger room — clear them out');
-    } else {
-      this.escortVan = {
-        x: roadCenter(7), y: roadCenter(7), angle: Math.PI,
-        speed: 0, health: 100, path: bfsPath(roadCenter(7), roadCenter(7), roadCenter(1), roadCenter(1)),
-        pathIndex: 0,
-      };
-      this.missionTarget = { x: roadCenter(1), y: roadCenter(1), label: 'OLD PORT WAREHOUSE' };
-      this.missionStage = 'escort';
-    }
-    return true;
-  }
-
-  completeMission() {
-    const def = this.mission;
-    this.cash += def.reward;
-    this.missionState = 'done';
-    this.mission = null;
-    this.escortVan = null;
-    this.gangsters = [];
-    this.clearRoadblock();
-    this.flash(`MISSION COMPLETE — $${def.reward} earned`);
-    this.missionIndex += 1;
-    if (this.onMissionDone) this.onMissionDone();
-    if (this.missionIndex >= MISSIONS.length) {
-      this.storyComplete = true;
-      this.flash('STORY COMPLETE — Solmar is yours. Free roam unlocked.');
+/** Advance pedestrians; they turn around at the city edge. */
+export function updatePedestrians(peds, dt) {
+  for (const p of peds) {
+    p.walkPhase += dt * 6;
+    p.x += Math.cos(p.angle) * p.speed * dt;
+    p.y += Math.sin(p.angle) * p.speed * dt;
+    if (p.x < 30 || p.x > WORLD.size - 30 || p.y < 30 || p.y > WORLD.size - 30) {
+      p.angle += Math.PI;
+      p.x = clampToWorld(p.x);
+      p.y = clampToWorld(p.y);
     }
   }
+}
 
-  failMission(reason) {
-    this.missionState = 'failed';
-    this.mission = null;
-    this.escortVan = null;
-    this.clearRoadblock();
-    this.flash(`MISSION FAILED — ${reason}`);
-  }
+/** A police cruiser, spawned off-screen-ish on the road grid, chasing the player. */
+export function spawnPoliceCar(rng, px, py) {
+  const gx = nearestRoadIndex(px);
+  const gy = nearestRoadIndex(py);
+  // Start two intersections away on a random axis.
+  const axis = chance(rng, 0.5) ? 'x' : 'y';
+  const dir = chance(rng, 0.5) ? 2 : -2;
+  let sx = gx;
+  let sy = gy;
+  if (axis === 'x') sx = Math.max(0, Math.min(WORLD.roads - 1, gx + dir));
+  else sy = Math.max(0, Math.min(WORLD.roads - 1, gy + dir));
+  return {
+    x: roadAt(sx),
+    y: roadAt(sy),
+    angle: 0,
+    speed: 0,
+    maxSpeed: 390,
+    path: [],
+    pathI: 0,
+    repath: 0,
+    siren: range(rng, 0, Math.PI * 2),
+  };
+}
 
-  updateMission(dt) {
-    if (!this.mission || this.missionState !== 'active') return;
-    const p = this.player;
-    const px = p.onFoot ? p.x : p.car.x;
-    const py = p.onFoot ? p.y : p.car.y;
-    const t = this.missionTarget;
-    if (this.mission.id === 'm1') {
-      if (this.missionStage === 'pickup') {
-        if (dist(px, py, t.x, t.y) < 70 && !p.onFoot) {
-          this.missionStage = 'dropoff';
-          this.missionTarget = { x: roadCenter(8), y: roadCenter(1), label: 'MARINA DROP-OFF' };
-          this.flash('Lena is in the car — take her to the Marina');
-        } else if (dist(px, py, t.x, t.y) < 70) {
-          this.flash('Lena needs a car — steal one first');
-        }
-      } else if (dist(px, py, t.x, t.y) < 80) {
-        this.completeMission();
-      }
-    } else if (this.mission.id === 'm2') {
-      if (this.missionStage === 'steal') {
-        const falco = this.cars.find((c) => c.def === 7);
-        if (falco && falco.stolen) {
-          this.missionStage = 'deliver';
-          this.missionTarget = { x: roadCenter(6), y: roadCenter(5), label: 'SUNSET GARAGE' };
-          this.flash('You have the Falco — lose the cops, reach the garage');
-        }
-      } else if (dist(px, py, t.x, t.y) < 80 && !p.onFoot) {
-        this.completeMission();
-      }
-    } else if (this.mission.id === 'm3') {
-      const van = this.escortVan;
-      if (!van) return;
-      if (van.health <= 0) { this.failMission('the van was destroyed'); return; }
-      if (dist(van.x, van.y, t.x, t.y) < 90) this.completeMission();
-    } else if (this.mission.id === 'm4') {
-      if (this.missionStage === 'pickup') {
-        if (dist(px, py, t.x, t.y) < 80) {
-          this.missionStage = 'deliver';
-          const shop = landmarkById(this.landmarks, 'paint');
-          this.missionTarget = { x: shop.x, y: shop.y, label: 'LOU’S PAINT SHOP' };
-          spawnGangsters(this, t.x, t.y, 2, 'motel');
-          this.addHeat(10, 'Harbor Boys called it in — ambush!');
-          this.flash('Ambush! Two Harbor Boys — then get the package to the paint shop');
-        }
-      } else if (dist(px, py, t.x, t.y) < 80) {
-        this.completeMission();
-      }
-    } else if (this.mission.id === 'm5') {
-      if (this.missionStage === 'clear') {
-        if (this.gangsters.length === 0) {
-          this.missionStage = 'grab';
-          this.flash('Vault clear — grab the cash!');
-        }
-      } else if (this.missionStage === 'grab') {
-        if (dist(px, py, t.x, t.y) < 80) {
-          this.cash += 2000;
-          this.missionStage = 'escape';
-          const pier = landmarkById(this.landmarks, 'pier');
-          this.missionTarget = { x: pier.x, y: pier.y, label: 'PIER 9 — ESCAPE' };
-          this.addHeat(14, 'Vault alarm — 3-star manhunt!');
-          this.flash('Vault cash +$2000 — run for Pier 9!');
-        }
-      } else if (dist(px, py, t.x, t.y) < 90) {
-        this.completeMission();
-      }
-    } else if (this.mission.id === 'm6') {
-      if (this.missionTimer <= 0) {
-        this.failMission('Kane closed the pier — the boat left without you');
-        return;
-      }
-      if (dist(px, py, t.x, t.y) < 90) this.completeMission();
-    } else if (this.mission.id === 'm7') {
-      if (this.missionStage === 'clear') {
-        if (this.gangsters.length === 0) {
-          this.missionStage = 'grab';
-          this.flash('Ledger room clear — grab the ledger!');
-        }
-      } else if (this.missionStage === 'grab') {
-        if (dist(px, py, t.x, t.y) < 80) {
-          this.missionStage = 'escape';
-          const marina = { x: roadCenter(8), y: roadCenter(1) };
-          this.missionTarget = { x: marina.x, y: marina.y, label: 'MARINA — BURN THE LEDGER' };
-          this.missionTimer = this.mission.timer || 90;
-          this.addHeat(16, 'Kane saw the ledger walk out — 4-star manhunt!');
-          this.flash('Ledger in hand — 90 seconds to the Marina!');
-        }
-      } else if (this.missionStage === 'escape') {
-        if (this.missionTimer <= 0) {
-          this.failMission('Kane’s roadblocks closed the Marina — the ledger is evidence now');
-          return;
-        }
-        if (dist(px, py, t.x, t.y) < 90) this.completeMission();
-      }
-    }
+/** Steer one police car along the grid path toward the player's road cell. */
+export function updatePoliceCar(car, px, py, dt) {
+  car.repath -= dt;
+  const tx = nearestRoadIndex(px);
+  const ty = nearestRoadIndex(py);
+  const cx = nearestRoadIndex(car.x);
+  const cy = nearestRoadIndex(car.y);
+  if (car.repath <= 0 || car.pathI >= car.path.length) {
+    car.path = gridPath(cx, cy, tx, ty);
+    car.pathI = 0;
+    car.repath = 1.2;
   }
-
-  // ---- per-frame update ----------------------------------------------------
-  update(input, dt) {
-    this.time += dt;
-    this.timeOfDay = 0.42 + Math.sin(this.time * 0.00004) * 0.05;
-    if (this.messageTimer > 0) this.messageTimer -= dt;
-    if (this.nearMissCooldown > 0) this.nearMissCooldown -= dt;
-    if (this.wanted > 0) {
-      this.heat = Math.max(0, this.heat - POLICE.decayPerSecond * dt);
-      const stars = Math.min(POLICE.maxStars, Math.floor(this.heat / 4));
-      if (stars < this.wanted && this.police.length === 0) this.wanted = stars;
-      this.policeTimer -= dt;
-      if (this.policeTimer <= 0) {
-        this.spawnPolice();
-        this.policeTimer = POLICE.spawnGap;
-      }
-      if (this.wanted >= POLICE.roadblockAtStars) this.spawnRoadblock();
-      else this.clearRoadblock();
-    } else {
-      this.clearRoadblock();
-    }
-    this.updatePlayer(input, dt);
-    tickReload(this.ammo, dt);
-    this.updateTraffic(dt);
-    this.updatePedestrians(dt);
-    this.updatePolice(dt);
-    updateGangsters(this, dt);
-    updateEnemyBullets(this, dt, (x, y, r) => !!circleHitsBuilding(this.buildings, x, y, r));
-    this.updateBullets(dt);
-    this.updateParticles(dt);
-    this.updateEscort(dt);
-    this.updateMission(dt);
-    updateFare(this);
-    checkPaintShop(this);
-    checkCashBags(this);
-    checkCoins(this);
-    if (this.mission && this.mission.id === 'm6' && this.missionState === 'active') {
-      this.missionTimer -= dt;
-    }
-    if (this.mission && this.mission.id === 'm7' && this.missionState === 'active' && this.missionStage === 'escape') {
-      this.missionTimer -= dt;
-    }
-    if (this.side.fareCooldown > 0) this.side.fareCooldown -= dt;
-    this.checkPickups();
-    if (this.player.health <= 0 && !this.wasted) this.setWasted();
+  let targetX = px;
+  let targetY = py;
+  if (car.pathI < car.path.length) {
+    targetX = roadAt(car.path[car.pathI][0]);
+    targetY = roadAt(car.path[car.pathI][1]);
+    if (Math.hypot(targetX - car.x, targetY - car.y) < 26) car.pathI++;
   }
-
-  updatePlayer(input, dt) {
-    const p = this.player;
-    p.punchCooldown = Math.max(0, p.punchCooldown - dt);
-    p.shootCooldown = Math.max(0, p.shootCooldown - dt);
-    p.invuln = Math.max(0, p.invuln - dt);
-    if (input.tapped(CONTROLS.reload)) {
-      if (startReload(this.ammo)) this.flash('Reloading…');
-    }
-    if (input.tapped(CONTROLS.taxi)) {
-      if (!this.startTaxiFare() && !this.side.fare) this.flash('No rider nearby — drive past a pedestrian and press T');
-    }
-    const mx = input.moveX();
-    const my = input.moveY();
-    if (p.onFoot) {
-      const speed = input.sprinting() ? PLAYER.runSpeed : PLAYER.walkSpeed;
-      const len = Math.hypot(mx, my) || 1;
-      const moving = mx !== 0 || my !== 0;
-      const nx = p.x + (mx / len) * speed * dt * (moving ? 1 : 0);
-      const ny = p.y + (my / len) * speed * dt * (moving ? 1 : 0);
-      if (moving) p.angle = Math.atan2(my, mx);
-      if (!circleHitsBuilding(this.buildings, nx, p.y, PLAYER.radius)) p.x = clamp(nx, 12, WORLD.width - 12);
-      if (!circleHitsBuilding(this.buildings, p.x, ny, PLAYER.radius)) p.y = clamp(ny, 12, WORLD.height - 12);
-      if (input.tapped(CONTROLS.enterCar)) this.tryEnterCar();
-      if (input.tapped(CONTROLS.punch)) this.punch();
-    } else {
-      const car = p.car;
-      const def = CARS[car.def];
-      const throttle = my < 0 ? 1 : my > 0 ? -0.55 : 0;
-      car.speed += throttle * def.accel * dt;
-      car.speed -= car.speed * 0.6 * dt;
-      if (!throttle) car.speed -= car.speed * 1.4 * dt;
-      // Space is the handbrake: hard stop, with a squeal of dust.
-      if (input.held(CONTROLS.handbrake)) {
-        car.speed -= car.speed * 6 * dt;
-        if (Math.abs(car.speed) > 60) this.kickDust(car);
-      }
-      car.speed = clamp(car.speed, -90, def.top);
-      const steer = mx * def.grip * (car.speed >= 0 ? 1 : -1) * clamp(Math.abs(car.speed) / 60, 0, 1);
-      car.angle += steer * dt * (car.speed >= 0 ? 1 : -1) * 0.9;
-      const nx = car.x + Math.cos(car.angle) * car.speed * dt;
-      const ny = car.y + Math.sin(car.angle) * car.speed * dt;
-      const hit = circleHitsBuilding(this.buildings, nx, ny, 16);
-      if (hit) {
-        car.speed *= -0.25;
-        car.health -= CAR_DAMAGE.wallHit;
-        this.burst(car.x, car.y, '#e8e4d8', 8);
-        if (this.onCrash) this.onCrash();
-        if (car.health <= CAR_DAMAGE.wreckAt) this.wreckCar(car);
-      } else {
-        car.x = clamp(nx, 14, WORLD.width - 14);
-        car.y = clamp(ny, 14, WORLD.height - 14);
-      }
-      p.x = car.x;
-      p.y = car.y;
-      p.angle = car.angle;
-      if (Math.abs(car.speed) > 120) this.kickDust(car);
-      this.checkNearMiss(car);
-      if (input.tapped(CONTROLS.exitCar)) this.exitCar();
-      if (input.mouse.down && p.shootCooldown <= 0) this.shoot(p.angle); // drive-by, straight ahead
-    }
-  }
-
-  // Threading past traffic at speed pays $15 a time. It rewards the
-  // driving the game is about, and it only pays while actually moving fast.
-  checkNearMiss(car) {
-    if (this.nearMissCooldown > 0) return;
-    if (Math.abs(car.speed) < NEAR_MISS.minSpeed) return;
-    for (const other of this.traffic) {
-      if (dist(car.x, car.y, other.x, other.y) < NEAR_MISS.range) {
-        this.nearMissCooldown = NEAR_MISS.cooldown;
-        this.nearMisses += 1;
-        this.cash += NEAR_MISS.pay;
-        this.flash(`NEAR MISS +$${NEAR_MISS.pay} — clean driving, Rex`);
-        if (this.onNearMiss) this.onNearMiss();
-        return;
-      }
-    }
-  }
-
-  wreckCar(car) {
-    car.wrecked = true;
-    car.speed = 0;
-    this.burst(car.x, car.y, '#ff8c3a', 16);
-    this.flash('CAR TOTALED — find another ride, and mind the walls');
-    if (this.player.car === car) this.exitCar();
-  }
-
-  tryEnterCar() {
-    const p = this.player;
-    let best = null;
-    let bestD = 60;
-    for (const car of [...this.cars, ...this.traffic]) {
-      if (car.wrecked) continue;
-      const d = dist(p.x, p.y, car.x, car.y);
-      if (d < bestD) { best = car; bestD = d; }
-    }
-    if (!best) return;
-    if (best.parked && !best.stolen) {
-      best.stolen = true;
-      this.carsStolen += 1;
-      this.addHeat(2, 'Car stolen');
-      this.flash(`Stole the ${best.name} — the owner called it in`);
-    }
-    if (this.traffic.includes(best)) {
-      this.traffic = this.traffic.filter((c) => c !== best);
-      this.addHeat(2, 'Carjacked in traffic');
-    }
-    best.parked = false;
-    p.onFoot = false;
-    p.car = best;
-  }
-
-  exitCar() {
-    const p = this.player;
-    const car = p.car;
-    if (!car) { p.onFoot = true; return; }
-    car.speed = 0;
-    p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 26;
-    p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 26;
-    p.onFoot = true;
-    p.car = null;
-  }
-
-  punch() {
-    const p = this.player;
-    if (p.punchCooldown > 0) return;
-    p.punchCooldown = 0.45;
-    const reach = 34;
-    const hx = p.x + Math.cos(p.angle) * reach;
-    const hy = p.y + Math.sin(p.angle) * reach;
-    for (const ped of this.pedestrians) {
-      if (dist(hx, hy, ped.x, ped.y) < 26) {
-        ped.panic = 3;
-        this.addHeat(1, 'Assault reported');
-        this.burst(ped.x, ped.y, '#ffd27d', 6);
-      }
-    }
-    for (const cop of this.police) {
-      if (dist(hx, hy, cop.x, cop.y) < 30) {
-        this.addHeat(3, 'Cop attacked');
-        this.burst(cop.x, cop.y, '#7fb0ff', 8);
-      }
-    }
-  }
-
-  shoot(angle) {
-    const p = this.player;
-    const result = tryFire(this.ammo);
-    if (result === 'empty') {
-      this.flash('Magazine empty — press R to reload');
-      return;
-    }
-    if (result === 'reloading') return;
-    p.shootCooldown = 0.28;
-    this.shotsFired += 1;
-    const ox = p.x + Math.cos(angle) * 18;
-    const oy = p.y + Math.sin(angle) * 18;
-    this.bullets.push({ x: ox, y: oy, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620, life: 0.9 });
-    this.addHeat(1, 'Shots fired');
-    if (this.onShoot) this.onShoot();
-  }
-
-  updateBullets(dt) {
-    for (const b of this.bullets) {
-      b.px = b.x;
-      b.py = b.y;
-      const ox = b.x;
-      const oy = b.y;
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      b.life -= dt;
-      // Walls stop a bullet anywhere along the step it took, not just where
-      // it landed: sample the midpoint too so fast rounds cannot skip a wall.
-      if (circleHitsBuilding(this.buildings, b.x, b.y, 2)
-        || circleHitsBuilding(this.buildings, (ox + b.x) / 2, (oy + b.y) / 2, 2)) {
-        b.life = 0;
-        this.burst(b.x, b.y, '#e8e4d8', 4);
-      }
-      for (const cop of this.police) {
-        if (segDist(cop.x, cop.y, ox, oy, b.x, b.y) < 20) {
-          b.life = 0;
-          this.burst(cop.x, cop.y, '#7fb0ff', 10);
-          this.police = this.police.filter((c) => c !== cop);
-          this.kills += 1;
-          this.addHeat(3, 'Officer down');
-        }
-      }
-      for (const ped of this.pedestrians) {
-        if (segDist(ped.x, ped.y, ox, oy, b.x, b.y) < 14) {
-          b.life = 0;
-          ped.panic = 4;
-          this.burst(ped.x, ped.y, '#ff9d7d', 8);
-          this.addHeat(2, 'Civilian hit');
-        }
-      }
-    }
-    bulletsVsGangsters(this);
-    this.bullets = this.bullets.filter((b) => b.life > 0);
-  }
-
-  updateTraffic(dt) {
-    for (const car of this.traffic) {
-      const aheadX = car.x + Math.cos(car.angle) * 46;
-      const aheadY = car.y + Math.sin(car.angle) * 46;
-      let blocked = false;
-      for (const other of [...this.traffic, ...this.cars]) {
-        if (other === car) continue;
-        if (dist(aheadX, aheadY, other.x, other.y) < 34) blocked = true;
-      }
-      const target = blocked ? 0 : car.cruise;
-      car.speed += (target - car.speed) * dt * 1.5;
-      car.x += Math.cos(car.angle) * car.speed * dt;
-      car.y += Math.sin(car.angle) * car.speed * dt;
-      if (car.x < -60) car.x = WORLD.width + 40;
-      if (car.x > WORLD.width + 60) car.x = -40;
-      if (car.y < -60) car.y = WORLD.height + 40;
-      if (car.y > WORLD.height + 60) car.y = -40;
-    }
-  }
-
-  updatePedestrians(dt) {
-    for (const ped of this.pedestrians) {
-      ped.walkPhase += dt * 6;
-      if (ped.panic > 0) {
-        ped.panic -= dt;
-        ped.angle = angleTo(ped.x, ped.y, this.player.x, this.player.y) + Math.PI;
-        ped.speed = 120;
-      } else {
-        ped.speed = 34;
-        if (this.rng.chance(dt * 0.2)) ped.angle = this.rng.range(0, Math.PI * 2);
-      }
-      const nx = ped.x + Math.cos(ped.angle) * ped.speed * dt;
-      const ny = ped.y + Math.sin(ped.angle) * ped.speed * dt;
-      if (!circleHitsBuilding(this.buildings, nx, ny, 8)) {
-        ped.x = clamp(nx, 12, WORLD.width - 12);
-        ped.y = clamp(ny, 12, WORLD.height - 12);
-      } else {
-        ped.angle += Math.PI / 2;
-      }
-    }
-  }
-
-  updatePolice(dt) {
-    const p = this.player;
-    for (const cop of this.police) {
-      cop.sirenPhase += dt * 4;
-      // A roadblock cruiser stays parked across the road; it still busts
-      // anyone who drives straight into it.
-      if (cop.block) continue;
-      cop.repath -= dt;
-      if (cop.repath <= 0) {
-        cop.path = bfsPath(cop.x, cop.y, p.x, p.y);
-        cop.pathIndex = 0;
-        cop.repath = 1.6;
-      }
-      const node = cop.path[Math.min(cop.pathIndex, cop.path.length - 1)];
-      if (node && dist(cop.x, cop.y, node.x, node.y) < 30) cop.pathIndex += 1;
-      const target = node || { x: p.x, y: p.y };
-      const desired = angleTo(cop.x, cop.y, target.x, target.y);
-      cop.angle += wrapAngle(desired - cop.angle) * Math.min(1, dt * 4);
-      cop.speed = POLICE.chaseSpeed;
-      cop.x += Math.cos(cop.angle) * cop.speed * dt;
-      cop.y += Math.sin(cop.angle) * cop.speed * dt;
-      if (dist(cop.x, cop.y, p.x, p.y) < POLICE.bustRadius && p.invuln <= 0) {
-        if (this.wanted >= 3 || this.rng.chance(dt * 0.5)) {
-          this.busted();
-        }
-      }
-    }
-    // Roadblock cops bust on contact too — checked outside the chase loop
-    // because the loop above skips parked cruisers.
-    for (const cop of this.police) {
-      if (!cop.block) continue;
-      if (dist(cop.x, cop.y, p.x, p.y) < POLICE.bustRadius && p.invuln <= 0) {
-        this.busted();
-      }
-    }
-  }
-
-  updateEscort(dt) {
-    const van = this.escortVan;
-    if (!van) return;
-    const node = van.path[Math.min(van.pathIndex, van.path.length - 1)];
-    if (node && dist(van.x, van.y, node.x, node.y) < 34) van.pathIndex += 1;
-    const target = node || { x: van.x, y: van.y };
-    const desired = angleTo(van.x, van.y, target.x, target.y);
-    van.angle += wrapAngle(desired - van.angle) * Math.min(1, dt * 3);
-    van.speed = 130;
-    van.x += Math.cos(van.angle) * van.speed * dt;
-    van.y += Math.sin(van.angle) * van.speed * dt;
-    if (this.wanted > 0 && this.rng.chance(dt * 0.4)) {
-      van.health -= 2;
-      this.burst(van.x, van.y, '#ffb03a', 3);
-    }
-  }
-
-  busted() {
-    const p = this.player;
-    p.health = Math.max(20, p.health - 25);
-    this.cash = Math.max(0, this.cash - 100);
-    this.heat = 0;
-    this.wanted = 0;
-    this.police = [];
-    this.roadblockSpawned = false;
-    p.invuln = 3;
-    if (!p.onFoot) this.exitCar();
-    p.x = roadCenter(4);
-    p.y = roadCenter(4);
-    this.flash('BUSTED — fined $100, dropped at Civic Plaza');
-  }
-
-  setWasted() {
-    this.wasted = true;
-    this.heat = 0;
-    this.wanted = 0;
-    this.police = [];
-    this.roadblockSpawned = false;
-    this.gangsters = [];
-    if (this.onWasted) this.onWasted();
-  }
-
-  respawn() {
-    const p = this.player;
-    p.health = PLAYER.maxHealth;
-    const hospital = landmarkById(this.landmarks, 'hospital');
-    p.x = hospital ? hospital.x : roadCenter(4);
-    p.y = hospital ? hospital.y : roadCenter(4);
-    p.invuln = 2;
-    if (!p.onFoot) { p.car = null; p.onFoot = true; }
-    this.heat = 0;
-    this.wanted = 0;
-    this.police = [];
-    this.roadblockSpawned = false;
-    this.gangsters = [];
-    this.enemyBullets = [];
-    this.wasted = false;
-    this.ammo.mag = PLAYER.magSize;
-    this.ammo.reserve = Math.max(this.ammo.reserve, 24);
-    this.flash('You woke up at Solmar General — the city forgives, once.');
-  }
-
-  checkPickups() {
-    const p = this.player;
-    for (const pk of this.pickups) {
-      if (pk.taken) continue;
-      if (dist(p.x, p.y, pk.x, pk.y) < 30) {
-        pk.taken = true;
-        if (pk.kind === 'health') {
-          p.health = Math.min(PLAYER.maxHealth, p.health + 50);
-          this.flash('Health +50');
-        } else if (pk.kind === 'ammo') {
-          this.ammo.reserve += pk.amount;
-          this.flash(`Ammo +${pk.amount} rounds`);
-        } else {
-          this.cash += pk.amount;
-          this.flash(`Found $${pk.amount} in a dropped bag`);
-        }
-        if (this.onPickup) this.onPickup();
-      }
-    }
-  }
-
-  burst(x, y, color, n) {
-    for (let i = 0; i < n; i++) {
-      const a = this.rng.range(0, Math.PI * 2);
-      const s = this.rng.range(30, 130);
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, color });
-    }
-  }
-
-  kickDust(car) {
-    if (this.rng.chance(0.3)) {
-      this.particles.push({
-        x: car.x - Math.cos(car.angle) * 16, y: car.y - Math.sin(car.angle) * 16,
-        vx: this.rng.range(-20, 20), vy: this.rng.range(-20, 20),
-        life: 0.4, color: '#cbb98f',
-      });
-    }
-  }
-
-  updateParticles(dt) {
-    for (const pt of this.particles) {
-      pt.x += pt.vx * dt;
-      pt.y += pt.vy * dt;
-      pt.life -= dt;
-    }
-    this.particles = this.particles.filter((pt) => pt.life > 0);
-  }
-
-  // ---- save / load -----------------------------------------------------------
-  save() {
-    const p = this.player;
-    const data = {
-      cash: this.cash, missionIndex: this.missionIndex, carsStolen: this.carsStolen,
-      kills: this.kills, x: p.x, y: p.y, health: p.health, seed: this.seed,
-      faresDone: this.faresDone, paintJobs: this.paintJobs, storyComplete: this.storyComplete,
-      nearMisses: this.nearMisses, coinsTaken: takenCoinIndices(this.coins),
-    };
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-      this.flash('Progress saved');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  static load() {
-    try {
-      const raw = localStorage.getItem(SAVE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  applySave(data) {
-    if (!data) return;
-    this.cash = data.cash || 0;
-    this.missionIndex = data.missionIndex || 0;
-    this.carsStolen = data.carsStolen || 0;
-    this.kills = data.kills || 0;
-    this.faresDone = data.faresDone || 0;
-    this.paintJobs = data.paintJobs || 0;
-    this.storyComplete = !!data.storyComplete;
-    this.nearMisses = data.nearMisses || 0;
-    applyCoinSave(this.coins, data.coinsTaken);
-    this.player.x = data.x ?? this.player.x;
-    this.player.y = data.y ?? this.player.y;
-    this.player.health = data.health ?? PLAYER.maxHealth;
-  }
+  const want = Math.atan2(targetY - car.y, targetX - car.x);
+  let diff = want - car.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  car.angle += Math.max(-3.2 * dt, Math.min(3.2 * dt, diff));
+  car.speed = Math.min(car.maxSpeed, car.speed + 420 * dt);
+  car.x = clampToWorld(car.x + Math.cos(car.angle) * car.speed * dt);
+  car.y = clampToWorld(car.y + Math.sin(car.angle) * car.speed * dt);
+  car.siren += dt * 6;
 }
