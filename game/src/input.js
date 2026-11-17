@@ -1,69 +1,68 @@
-// SOLMAR HEAT — input.js
-// Keyboard + mouse state, plus the edge-triggered "pressed this frame"
-// helpers the game loop consumes. WASD/arrows move, Shift sprints,
-// E enters/steals a car, mouse aims, click shoots, Space is the handbrake,
-// P/Esc pauses, M mutes, R restarts after wasted/busted.
+// input.js — keyboard and mouse state for Solmar Heat.
+// One object owns every key and the mouse; gameplay reads it through the
+// helpers below instead of touching DOM events directly, so a headless
+// screenshot run can drive the same code path with scripted input.
 
-export function createInput(canvas) {
-  const keys = new Set();
-  const pressed = new Set();
-  const mouse = { x: 0, y: 0, down: false, clicked: false, wheel: 0 };
-
-  function keyName(e) {
-    // Lowercase everything: 'Enter', 'ArrowUp', 'Shift' and ' ' all land in
-    // the same namespace the game checks ('enter', 'arrowup', 'shift', ' ').
-    return e.key.toLowerCase();
+export class Input {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.keys = new Set();
+    this.pressed = new Set(); // keys hit since the last frame was consumed
+    this.mouse = { x: 0, y: 0, down: false, clicked: false, rightDown: false };
+    this._onKeyDown = (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+      if (!e.repeat) this.pressed.add(e.code);
+      this.keys.add(e.code);
+    };
+    this._onKeyUp = (e) => this.keys.delete(e.code);
+    this._onMouseMove = (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      this.mouse.x = e.clientX - r.left;
+      this.mouse.y = e.clientY - r.top;
+    };
+    this._onMouseDown = (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      this.mouse.x = e.clientX - r.left;
+      this.mouse.y = e.clientY - r.top;
+      if (e.button === 0) { this.mouse.down = true; this.mouse.clicked = true; }
+      if (e.button === 2) this.mouse.rightDown = true;
+    };
+    this._onMouseUp = (e) => {
+      if (e.button === 0) this.mouse.down = false;
+      if (e.button === 2) this.mouse.rightDown = false;
+    };
+    this._onBlur = () => { this.keys.clear(); this.mouse.down = false; };
+    this._onContext = (e) => e.preventDefault();
   }
 
-  window.addEventListener('keydown', (e) => {
-    const k = keyName(e);
-    if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
-      e.preventDefault();
-    }
-    if (!keys.has(k)) pressed.add(k);
-    keys.add(k);
-  });
-  window.addEventListener('keyup', (e) => keys.delete(keyName(e)));
-  window.addEventListener('blur', () => keys.clear());
+  attach() {
+    window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup', this._onKeyUp);
+    window.addEventListener('blur', this._onBlur);
+    this.canvas.addEventListener('mousemove', this._onMouseMove);
+    this.canvas.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
+    this.canvas.addEventListener('contextmenu', this._onContext);
+  }
 
-  canvas.addEventListener('mousemove', (e) => {
-    const r = canvas.getBoundingClientRect();
-    mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
-    mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
-  });
-  canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) {
-      mouse.down = true;
-      mouse.clicked = true;
-    }
-  });
-  window.addEventListener('mouseup', (e) => {
-    if (e.button === 0) mouse.down = false;
-  });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Held right now?
+  down(code) { return this.keys.has(code); }
 
-  return {
-    keys,
-    mouse,
-    down(...names) {
-      return names.some((n) => keys.has(n));
-    },
-    // True only on the frame the key went down; consumed by the game loop.
-    wasPressed(name) {
-      return pressed.has(name);
-    },
-    axisX() {
-      return (keys.has('d') || keys.has('arrowright') ? 1 : 0) -
-        (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
-    },
-    axisY() {
-      return (keys.has('s') || keys.has('arrowdown') ? 1 : 0) -
-        (keys.has('w') || keys.has('arrowup') ? 1 : 0);
-    },
-    endFrame() {
-      pressed.clear();
-      mouse.clicked = false;
-      mouse.wheel = 0;
-    },
-  };
+  // Hit since the last endFrame()? Edge-triggered, for menus and actions.
+  hit(code) { return this.pressed.has(code); }
+
+  // Any of these codes held? Handy for WASD + arrows doing the same job.
+  any(...codes) { return codes.some((c) => this.keys.has(c)); }
+
+  // Mouse click edge since the last endFrame(), with canvas coordinates.
+  click() {
+    if (!this.mouse.clicked) return null;
+    return { x: this.mouse.x, y: this.mouse.y };
+  }
+
+  // Call once per frame after the game has read the input.
+  endFrame() {
+    this.pressed.clear();
+    this.mouse.clicked = false;
+  }
 }

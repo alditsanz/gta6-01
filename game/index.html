@@ -3,45 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SOLMAR HEAT — an open-world crime story</title>
-<link rel="icon" href="data:,">
+<title>Solmar Heat — an open-world crime story</title>
 <style>
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: #10161e;
-    height: 100%;
-    overflow: hidden;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  #wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
-  }
-  canvas {
-    width: min(100vw, 177.78vh);
-    height: min(100vh, 56.25vw);
-    display: block;
-    background: #1c2733;
-    image-rendering: auto;
-  }
-  #mute-note {
-    position: fixed;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: rgba(255,255,255,0.6);
-    font-size: 12px;
-    letter-spacing: 1px;
-    pointer-events: none;
-  }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #101018; }
+  #game { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
 </style>
 </head>
 <body>
-<div id="wrap"><canvas id="game" width="1280" height="720"></canvas></div>
-<div id="mute-note"></div>
-<script type="module" src="./src/main.js"></script>
+<canvas id="game" width="1280" height="800"></canvas>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>

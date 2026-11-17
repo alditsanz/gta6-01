@@ -1,136 +1,144 @@
-// SOLMAR HEAT — config.js
-// Every tunable number, the city layout and the story live here.
-// Nothing in this file comes from any commercial game: the city of Solmar,
-// its streets, its people and its story are all invented for this game.
+// config.js — every tunable number for Solmar Heat in one place.
+// The city, the cars, the missions, the wanted system and the feel of the
+// controls are all defined here; the other modules read from this file and
+// never hard-code a tuning value of their own.
 
-// Canvas the game is drawn at (the page scales it to the window).
-export const VIEW_W = 1280;
-export const VIEW_H = 720;
+// --- The city ---------------------------------------------------------------
+export const CITY = {
+  blocks: 9, // 9 x 9 blocks of buildings
+  pitch: 280, // distance between street centrelines, in world pixels
+  road: 76, // street width, in world pixels
+  // World size is blocks * pitch (2520). Streets run along x = k * pitch and
+  // y = k * pitch for k = 0..blocks; block (i, j) sits between them.
+  get size() { return this.blocks * this.pitch; },
+  get roadHalf() { return this.road / 2; },
+  get block() { return this.pitch - this.road; },
+};
 
-// The city is a square, WORLD x WORLD world units (1 unit = 1 px at zoom 1).
-export const WORLD = 3600;
-// Streets run on this grid; blocks sit between neighbouring streets.
-export const STREETS = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000, 3400];
-export const ROAD_HALF = 34; // half the asphalt width
-export const LANE = 15; // lane offset from a street centre line
-
-// Golden-hour palette: a sun-soaked coastal city, late afternoon.
+// Sun-soaked coastal palette: warm sand, terracotta roofs, teal sea.
 export const PALETTE = {
-  grass: '#7fae5a',
-  grassDry: '#93bd68',
+  grass: '#8fae5f',
   sand: '#e8d29a',
-  water: '#3f8fb8',
-  waterDeep: '#2f739c',
-  asphalt: '#4a4a52',
-  asphaltEdge: '#3a3a42',
+  sea: '#2e7f9e',
+  seaDeep: '#1f5f7d',
+  road: '#3a3a40',
+  roadEdge: '#565660',
   sidewalk: '#b9b3a4',
-  laneMark: '#e8d44d',
-  buildingTop: ['#c9a37e', '#b98d68', '#a8b6c4', '#d8c49a', '#9fb3a8', '#c47f6e'],
-  buildingSide: ['#8a6b4d', '#7d5f45', '#6f7d8c', '#94825f', '#6b7d72', '#8a5546'],
-  roofDetail: '#00000022',
-  parkTree: '#3e7d3a',
-  parkTreeLight: '#5da24e',
-  minimapBg: '#1c2733',
-  minimapRoad: '#5b6b7a',
-  minimapWater: '#2f739c',
-  minimapPark: '#3e7d3a',
+  laneDash: '#e8e4d2',
+  crosswalk: '#d8d4c4',
+  buildingRoof: ['#c96f4a', '#d9a05b', '#b5533c', '#7d9b76', '#5b7d8c', '#c98a5b'],
+  buildingWall: ['#e8dcc8', '#f0e6d2', '#dcc7a8', '#e2d3b8'],
+  parkGreen: '#6f9e4e',
+  tree: ['#3f7a34', '#4d8a3a', '#5da244'],
 };
 
-export const CAR_TYPES = {
-  sedan:   { name: 'Solmar Sedan',   len: 46, wid: 22, accel: 420, maxSpeed: 330, grip: 2.6, colors: ['#c0392b', '#2e6fb0', '#d8d8d8', '#3a3a3a', '#7d5ba6'] },
-  coupe:   { name: 'Vento Coupe',    len: 44, wid: 21, accel: 520, maxSpeed: 380, grip: 3.0, colors: ['#e8b73a', '#c0392b', '#1f8a5b', '#d8d8d8'] },
-  sports:  { name: 'Falco GT',       len: 46, wid: 22, accel: 640, maxSpeed: 470, grip: 3.4, colors: ['#e84a3a', '#f2c230', '#222831', '#2e6fb0'] },
-  taxi:    { name: 'City Taxi',      len: 46, wid: 22, accel: 430, maxSpeed: 340, grip: 2.6, colors: ['#f2c230'] },
-  van:     { name: 'Cargo Van',      len: 54, wid: 24, accel: 340, maxSpeed: 280, grip: 2.2, colors: ['#d8d8d8', '#7d8a96', '#3a3a3a'] },
-  truck:   { name: 'Haul Truck',     len: 64, wid: 26, accel: 280, maxSpeed: 250, grip: 2.0, colors: ['#8a5a2b', '#5b6b7a', '#d8d8d8'] },
-  police:  { name: 'SCPD Cruiser',   len: 47, wid: 22, accel: 560, maxSpeed: 430, grip: 3.1, colors: ['#1c2733'] },
-  pickup:  { name: 'Dune Pickup',    len: 50, wid: 23, accel: 460, maxSpeed: 350, grip: 2.7, colors: ['#3a7d5a', '#b0492f', '#d8d8d8'] },
+// --- Vehicles: 8 stealable cars ---------------------------------------------
+// speed: top speed px/s. accel: px/s^2. turn: radians/s at full lock.
+// grip: how much speed is kept through a turn. length/width in px.
+export const VEHICLES = [
+  { id: 'vento', name: 'Vento', kind: 'sedan', speed: 430, accel: 300, turn: 2.6, grip: 0.86, len: 52, wid: 26, color: '#c23b2e', price: 1200 },
+  { id: 'sirocco', name: 'Sirocco', kind: 'coupe', speed: 470, accel: 340, turn: 2.9, grip: 0.84, len: 50, wid: 25, color: '#e8b13c', price: 1800 },
+  { id: 'falco', name: 'Falco GT', kind: 'sports', speed: 560, accel: 420, turn: 3.2, grip: 0.8, len: 50, wid: 25, color: '#2e6fc2', price: 4200 },
+  { id: 'cab', name: 'Solmar Cab', kind: 'taxi', speed: 420, accel: 290, turn: 2.7, grip: 0.86, len: 52, wid: 26, color: '#f2c230', price: 900 },
+  { id: 'mule', name: 'Mule', kind: 'van', speed: 360, accel: 230, turn: 2.1, grip: 0.9, len: 60, wid: 28, color: '#8a8f96', price: 1100 },
+  { id: 'hauler', name: 'Hauler', kind: 'truck', speed: 330, accel: 200, turn: 1.9, grip: 0.92, len: 72, wid: 30, color: '#5b7d3c', price: 1500 },
+  { id: 'bison', name: 'Bison', kind: 'pickup', speed: 440, accel: 310, turn: 2.5, grip: 0.85, len: 56, wid: 27, color: '#7a4a8c', price: 1600 },
+  { id: 'cruiser', name: 'Interceptor', kind: 'police', speed: 500, accel: 380, turn: 3.0, grip: 0.82, len: 54, wid: 26, color: '#20242e', price: 0 },
+];
+
+// --- People -----------------------------------------------------------------
+export const PLAYER = {
+  walkSpeed: 210, // px/s on foot
+  runSpeed: 300, // holding Shift
+  radius: 13,
+  maxHp: 100,
+  punchDamage: 18,
+  punchRange: 34,
+  punchCooldown: 0.45,
 };
 
-// Named places the story and the map use. x/y are world coordinates.
-export const PLACES = {
-  safehouse: { x: 600,  y: 620,  label: "Rex's Safehouse" },
-  motel:     { x: 2600, y: 1000, label: 'The Palms Motel' },
-  bank:      { x: 1800, y: 1800, label: 'Solmar National Bank' },
-  hospital:  { x: 1400, y: 2600, label: 'St. Clara Hospital' },
-  docks:     { x: 3300, y: 2200, label: 'Pier 9 Docks' },
-  paintshop: { x: 1000, y: 2200, label: "Lou's Paint Shop" },
-  beach:     { x: 1800, y: 3500, label: 'Solmar Beach' },
-  plaza:     { x: 2200, y: 1400, label: 'Marina Plaza' },
+export const PISTOL = {
+  damage: 34,
+  range: 460,
+  magSize: 12,
+  reloadTime: 1.1,
+  fireCooldown: 0.22,
+  spread: 0.035,
 };
 
-// The story: three missions. Each mission is a list of steps; a step is
-// finished by reaching its marker, stealing a car, waiting somewhere, or
-// surviving until the wanted level drops.
+// --- Wanted level -----------------------------------------------------------
+export const WANTED = {
+  maxStars: 5,
+  decayDelay: 9, // seconds of no crime before heat starts to fall
+  decayPerSecond: 0.12, // stars per second once decaying
+  finePerStar: 150, // cash lost when busted
+  // Police pressure per star: how many cruisers and foot cops are out.
+  cruisersPerStar: [0, 1, 2, 3, 4, 5],
+  copsPerStar: [0, 1, 2, 3, 4, 6],
+  bustRadius: 20, // a foot cop this close, on foot, busts you
+  bustTime: 0.7, // seconds inside bustRadius before the bust lands
+};
+
+// --- Missions ---------------------------------------------------------------
+// Each mission is a list of stages. A stage has a kind (go / steal / deliver /
+// hold / escape / talk), a target place or vehicle, and the line Mama Lou or
+// the crew says when it starts.
 export const MISSIONS = [
   {
-    id: 'first-wheels',
-    title: '1 — First Wheels',
-    intro: 'Mama Lou: "Rex, my boy. You want work in this town, you need wheels. There is a Vento parked by the plaza — take it. Then bring it to my paint shop so the law forgets its plates."',
-    reward: 150,
-    steps: [
-      { kind: 'goto',   x: 2200, y: 1400, text: 'Go to the Vento Coupe at Marina Plaza', radius: 90 },
-      { kind: 'steal',  x: 2200, y: 1400, text: 'Steal the Vento (press E beside it)', radius: 90 },
-      { kind: 'drive',  x: 1000, y: 2200, text: "Drive it to Lou's Paint Shop", radius: 110 },
+    id: 'lou-errand',
+    name: "Lou's Errand",
+    reward: 800,
+    intro: "Mama Lou: Rex, baby, you're back. I need that red Vento parked by the docks. Bring it to my paint shop — no scratches, no cops.",
+    stages: [
+      { kind: 'steal', label: 'Steal the red Vento at the docks', place: 'docks' },
+      { kind: 'deliver', label: "Deliver the Vento to Lou's Paint Shop", place: 'paintshop' },
     ],
-    outro: 'Mama Lou: "Clean plates, clean conscience. Come see me when you want real money."',
   },
   {
-    id: 'the-pickup',
-    title: '2 — The Pickup',
-    intro: 'Mama Lou: "A friend left a package at The Palms Motel, room 7. Pick it up on foot — no car at the door, the desk man talks. Then get back here fast."',
-    reward: 400,
-    steps: [
-      { kind: 'drive',  x: 2600, y: 1000, text: 'Drive to The Palms Motel', radius: 110 },
-      { kind: 'wait',   x: 2600, y: 1000, text: 'Walk in and grab the package (stand in the circle)', radius: 70, wait: 2.5 },
-      { kind: 'escape', x: 600,  y: 620,  text: 'Cops! Lose them and get back to the Safehouse', radius: 110, wantedOnStart: 2 },
+    id: 'palms-pickup',
+    name: 'The Palms Pickup',
+    reward: 1400,
+    intro: 'Mama Lou: A package is waiting at The Palms Motel, room 7. Grab it and come home. And Rex — the Harbor Boys are watching that motel.',
+    stages: [
+      { kind: 'go', label: 'Reach The Palms Motel', place: 'motel' },
+      { kind: 'pickup', label: 'Pick up the package (hold E)', place: 'motel' },
+      { kind: 'escape', label: 'Escape the ambush — lose the heat, reach the paint shop', place: 'paintshop' },
     ],
-    outro: 'Mama Lou: "That package was worth more than my shop. You are in the family now, Rex."',
   },
   {
-    id: 'the-big-score',
-    title: '3 — The Big Score',
-    intro: 'Detective Kane is on to us. One last job: the National Bank vault. Grab the cash, the Harbor Boys will try to stop you — and so will every cop in Solmar. Get to Pier 9 and the boat is waiting.',
-    reward: 1200,
-    steps: [
-      { kind: 'drive',  x: 1800, y: 1800, text: 'Get to Solmar National Bank', radius: 110 },
-      { kind: 'wait',   x: 1800, y: 1800, text: 'Crack the vault — hold the circle', radius: 80, wait: 4, spawnGang: 4 },
-      { kind: 'escape', x: 3300, y: 2200, text: 'Escape to Pier 9 Docks — lose the cops or outrun them', radius: 120, wantedOnStart: 3 },
+    id: 'harbor-job',
+    name: 'The Harbor Job',
+    reward: 3500,
+    intro: 'Mama Lou: The National Bank vault. We crack it tonight, we walk out rich, we never look back. The Harbor Boys will not let that happen quietly.',
+    stages: [
+      { kind: 'go', label: 'Reach the National Bank', place: 'bank' },
+      { kind: 'crack', label: 'Crack the vault (hold E by the vault door)', place: 'bank' },
+      { kind: 'escape', label: 'Escape the manhunt — reach Pier 9', place: 'pier' },
     ],
-    outro: 'Mama Lou: "Solmar is yours now, Rex. The boat leaves at dawn — or you stay and run this town."',
   },
 ];
 
-export const GAME = {
-  seed: 2026,
-  playerWalk: 175,
-  playerSprint: 265,
-  playerRadius: 13,
-  playerMaxHp: 100,
-  pistolDamage: 34,
-  pistolRange: 430,
-  pistolAmmo: 12,
-  pistolReloadSecs: 1.1,
-  bulletSpeed: 950,
-  punchDamage: 12,
-  punchRange: 34,
-  trafficCars: 26,
-  parkedCars: 22,
-  pedestrians: 34,
-  maxWanted: 5,
-  wantedDecaySecs: 26,
-  bustSeconds: 1.6,
-  bustFine: 200,
-  cashPickupValue: 25,
-  saveKey: 'solmar-heat-save-v1',
+// Named places on the map: block coordinates (i, j) in the 9x9 grid.
+export const PLACES = {
+  paintshop: { block: [1, 1], name: "Lou's Paint Shop" },
+  motel: { block: [7, 2], name: 'The Palms Motel' },
+  bank: { block: [4, 4], name: 'National Bank' },
+  hospital: { block: [2, 7], name: 'Solmar General' },
+  park: { block: [4, 1], name: 'Marlowe Park' },
+  docks: { block: [8, 6], name: 'Solmar Docks' },
+  pier: { block: [8, 8], name: 'Pier 9' },
+  beach: { block: [8, 3], name: 'Solmar Beach' },
+  safehouse: { block: [1, 6], name: "Rex's Safehouse" },
 };
 
-export const DIALOGUE = {
-  stealSeen: 'A witness called it in! The cops are coming.',
-  copDown: 'Officer down! Every cop in Solmar is on you now.',
-  pedDown: 'That was a civilian! Wanted level up.',
-  busted: 'BUSTED — Detective Kane has you. Fine paid, back to the safehouse.',
-  wasted: 'WASTED — St. Clara patched you up. The city keeps moving.',
-  saved: 'Progress saved.',
-  lowHp: 'You are hurt — get to St. Clara Hospital (green cross on the map).',
+// --- Feel -------------------------------------------------------------------
+export const FEEL = {
+  cameraLerp: 5.5, // camera follow smoothing
+  zoom: 1.0,
+  skidMarkLife: 4,
+  muzzleLife: 0.08,
+  dayLength: 240, // seconds for a full in-game day cycle
+  startHour: 9.5, // 09:30 in the morning sun
 };
+
+export const SAVE_KEY = 'solmar-heat-save-v1';
