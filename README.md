@@ -4,7 +4,7 @@
 
 # Solmar Heat
 
-An original open-world crime game for [make.fun's Make GTA 6 bounty](https://make.fun/c/gta6-01) — a sun-soaked modern city, seven story jobs, and no part of any commercial game.
+An original open-world crime game for [make.fun's Make GTA 6 bounty](https://make.fun/bounty/gta6-01) — a sun-soaked modern city, seven story jobs, and no part of any commercial game.
 
 ## The game
 
