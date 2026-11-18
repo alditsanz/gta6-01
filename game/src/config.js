@@ -1,245 +1,244 @@
-// Solmar Heat — config: the city's numbers, names and data tables.
-// Everything the other files need lives here, so tuning never means
-// hunting through the game loop.
-var SH = {};
+// Solmar Heat — config: every number and name the game runs on.
+// One place for tuning so the other files stay about behaviour, not data.
 
-SH.WORLD = 2440; // world is WORLD x WORLD units
-SH.GRID = 9; // 9 x 9 street grid
-SH.ROAD_W = 46; // asphalt width of a road
-SH.ROAD0 = 120; // first road line
-SH.ROAD_STEP = 254; // distance between road lines
-SH.roadAt = function (i) { return SH.ROAD0 + i * SH.ROAD_STEP; };
-
-// A point is on a road when it sits close to a road line on either axis.
-SH.onRoad = function (x, y) {
-  for (var i = 0; i < SH.GRID; i++) {
-    var r = SH.roadAt(i);
-    if (Math.abs(x - r) <= SH.ROAD_W / 2 || Math.abs(y - r) <= SH.ROAD_W / 2) return true;
-  }
-  return false;
+const CFG = {
+  world: 2440,            // square city, units
+  roadWidth: 34,
+  // Roads run both ways at these coordinates; road 8 sits at 2151.
+  roads: [31, 296, 561, 826, 1091, 1356, 1621, 1886, 2151],
+  playerRadius: 13,
+  walkSpeed: 170,
+  sprintMult: 1.6,
+  carAccel: 320,
+  carMaxSpeed: 420,
+  carReverseMax: 150,
+  carTurn: 2.6,
+  handbrakeGrip: 0.86,
+  // Wanted: heat 0..500, one star per 100 heat. A fresh star lands
+  // mid-band (star*100 + 50) so it never decays back the next frame.
+  heatMax: 500,
+  heatPerStar: 100,
+  heatDecayPerSec: 3,
+  heatSteal: 60,
+  heatShot: 25,
+  heatSpeeding: 10,
+  heatKill: 80,
+  // Money
+  coinValue: 75,
+  nearMissValue: 15,
+  nearMissCooldown: 1.5,
+  nearMissMinSpeed: 150,
+  taxiFare: 310,
+  deliveryPay: 250,
+  turfTakeoverPay: 150,
+  turfIncomePerDistrict: 40,
+  turfIncomeEverySec: 60,
+  hospitalFee: 50,
+  // Car damage
+  wallDamage: 8,
+  carMaxHealth: 100,
+  // Combat
+  magSize: 12,
+  reserveAmmo: 48,
+  bulletSpeed: 900,
+  bulletDamage: 34,
+  guardHealth: 100,
+  punchDamage: 25,
+  punchRange: 34,
+  // Day / night: a full in-game day lasts 240 real seconds.
+  dayLengthSec: 240,
+  nightStartMin: 20 * 60,
+  nightEndMin: 6 * 60,
+  rainGrip: 0.72,
+  // Turf war
+  turfWarDuration: 30,
+  turfWarCooldown: 20,
+  gangCarDamage: 5,
 };
 
-// The nearest road line on one axis.
-SH.nearestRoad = function (v) {
-  var best = SH.roadAt(0), bd = 1e9;
-  for (var i = 0; i < SH.GRID; i++) {
-    var d = Math.abs(v - SH.roadAt(i));
-    if (d < bd) { bd = d; best = SH.roadAt(i); }
-  }
-  return best;
-};
-
-// Districts: a 3 x 3 grid of named neighbourhoods, plus Canal Row,
-// the tenth district, carved out of the south-east corner.
-SH.DISTRICT_GRID = [
-  ['Sunset Mile', 'Cactus Court', 'Neon Strip'],
-  ['Old Town', 'Palm Court', 'Harbor Lights'],
-  ['Marina', 'Pier 9', 'Vineyard Hills']
-];
-SH.CANAL = { x0: 1650, y0: 2000 }; // Canal Row starts here
-SH.districtAt = function (x, y) {
-  if (x >= SH.CANAL.x0 && y >= SH.CANAL.y0) return 'Canal Row';
-  var cx = Math.max(0, Math.min(2, Math.floor(x / (SH.WORLD / 3))));
-  var cy = Math.max(0, Math.min(2, Math.floor(y / (SH.WORLD / 3))));
-  return SH.DISTRICT_GRID[cy][cx];
-};
-
-// Canals: two water bands across Canal Row. Cars and the player can
-// only cross them on the bridges, where a road meets the water.
-SH.CANALS = [
-  { y0: 2080, y1: 2130 },
-  { y0: 2260, y1: 2310 }
-];
-SH.BRIDGE_HALF = 30; // bridge half-width around a road line
-SH.onBridge = function (x, y) {
-  for (var c = 0; c < SH.CANALS.length; c++) {
-    var band = SH.CANALS[c];
-    if (y >= band.y0 && y <= band.y1) {
-      for (var i = 0; i < SH.GRID; i++) {
-        if (Math.abs(x - SH.roadAt(i)) <= SH.BRIDGE_HALF) return true;
-      }
-      return false;
-    }
-  }
-  return true; // not over a canal at all
-};
-SH.inCanalWater = function (x, y) {
-  if (x < SH.CANAL.x0) return false;
-  for (var c = 0; c < SH.CANALS.length; c++) {
-    var band = SH.CANALS[c];
-    if (y >= band.y0 && y <= band.y1 && !SH.onBridge(x, y)) return true;
-  }
-  return false;
-};
-
-// The twelve stealable cars. The last two are new for round 5 and
-// live in Canal Row: the Marlin and the Kite.
-SH.CARS = [
-  { name: 'Falco', color: '#e33b2f', top: 265, accel: 240 },
-  { name: 'Vento', color: '#f2c200', top: 235, accel: 210, taxi: true },
-  { name: 'Comet', color: '#3f7de0', top: 255, accel: 230 },
-  { name: 'Bison', color: '#5a4a3a', top: 210, accel: 190 },
-  { name: 'Lynx', color: '#c9c9c9', top: 250, accel: 225 },
-  { name: 'Dune', color: '#d97b2b', top: 225, accel: 200 },
-  { name: 'Marlin', color: '#19b8c4', top: 260, accel: 235 },
-  { name: 'Strada', color: '#7b4fd0', top: 245, accel: 220 },
-  { name: 'Puma', color: '#2fae5f', top: 248, accel: 222 },
-  { name: 'Ridge', color: '#8a94a6', top: 215, accel: 195 },
-  { name: 'Nova', color: '#ff7ab8', top: 252, accel: 228 },
-  { name: 'Kite', color: '#ffe14d', top: 258, accel: 232 }
+// Districts: 10 rectangles that tile the city. Canal Row is the thin
+// eastern strip with two vertical canals and bridges on the roads.
+const DISTRICTS = [
+  { name: 'Sunset Mile',   x0: 0,    y0: 0,    x1: 813,  y1: 813 },
+  { name: 'Cactus Court',  x0: 813,  y0: 0,    x1: 1626, y1: 813 },
+  { name: 'Neon Strip',    x0: 1626, y0: 0,    x1: 2440, y1: 813 },
+  { name: 'Marina',        x0: 0,    y0: 813,  x1: 813,  y1: 1626 },
+  { name: 'Pier 9',        x0: 813,  y0: 813,  x1: 1626, y1: 1626 },
+  { name: 'East Market',   x0: 1626, y0: 813,  x1: 2200, y1: 1626 },
+  { name: 'Canal Row',     x0: 2200, y0: 813,  x1: 2440, y1: 1626 },
+  { name: 'Old Town',      x0: 0,    y0: 1626, x1: 813,  y1: 2440 },
+  { name: 'Harbor Lights', x0: 813,  y0: 1626, x1: 1626, y1: 2440 },
+  { name: 'Southgate',     x0: 1626, y0: 1626, x1: 2440, y1: 2440 },
 ];
 
-// Where the parked cars start (one per model).
-SH.CAR_SPOTS = [
-  { model: 0, x: 882, y: 374 }, { model: 1, x: 628, y: 628 },
-  { model: 2, x: 1390, y: 882 }, { model: 3, x: 1898, y: 1390 },
-  { model: 4, x: 374, y: 1644 }, { model: 5, x: 1136, y: 1136 },
-  { model: 6, x: 1898, y: 2220 }, { model: 7, x: 2152, y: 628 },
-  { model: 8, x: 628, y: 2152 }, { model: 9, x: 1644, y: 1644 },
-  { model: 10, x: 374, y: 882 }, { model: 11, x: 2152, y: 2400 }
+// Canals: vertical water bands inside Canal Row. Horizontal roads
+// cross them on bridges; anywhere else the water blocks movement.
+const CANALS = [
+  { x0: 2260, x1: 2320, y0: 813, y1: 1626 },
+  { x0: 2360, x1: 2420, y0: 813, y1: 1626 },
 ];
 
-// Ten hidden Solmar coins, one tucked into Canal Row.
-SH.COINS = [
-  { x: 374, y: 628 }, { x: 882, y: 1136 }, { x: 1390, y: 374 },
-  { x: 1898, y: 882 }, { x: 628, y: 1644 }, { x: 1136, y: 2152 },
-  { x: 2152, y: 1644 }, { x: 1644, y: 628 }, { x: 374, y: 1898 },
-  { x: 2152, y: 2220 }
+// The 12 stealable cars. Falco and the Vento taxi are the familiar ones.
+const CAR_MODELS = [
+  { id: 'falco',  name: 'Falco',  color: '#e33f2f', speed: 430 },
+  { id: 'vento',  name: 'Vento',  color: '#f2c230', speed: 380, taxi: true },
+  { id: 'comet',  name: 'Comet',  color: '#3f7de3', speed: 450 },
+  { id: 'brisa',  name: 'Brisa',  color: '#39c0a5', speed: 400 },
+  { id: 'toro',   name: 'Toro',   color: '#7a4a21', speed: 360 },
+  { id: 'lobo',   name: 'Lobo',   color: '#5b5f6b', speed: 410 },
+  { id: 'palma',  name: 'Palma',  color: '#e38ec2', speed: 390 },
+  { id: 'siroco', name: 'Siroco', color: '#d8d8d8', speed: 440 },
+  { id: 'mamba',  name: 'Mamba',  color: '#20242e', speed: 460 },
+  { id: 'kite',   name: 'Kite',   color: '#8fd13f', speed: 370 },
+  { id: 'rondo',  name: 'Rondo',  color: '#b06ae0', speed: 385 },
+  { id: 'atlas',  name: 'Atlas',  color: '#c98a2e', speed: 350 },
 ];
-SH.COIN_VALUE = 75;
+
+// Where the stealable cars park at the start of a run.
+const CAR_SPAWNS = [
+  { model: 'falco',  x: 296,  y: 340 },
+  { model: 'vento',  x: 826,  y: 826 },
+  { model: 'comet',  x: 1621, y: 296 },
+  { model: 'brisa',  x: 561,  y: 1356 },
+  { model: 'toro',   x: 1886, y: 561 },
+  { model: 'lobo',   x: 1091, y: 1886 },
+  { model: 'palma',  x: 2151, y: 1091 },
+  { model: 'siroco', x: 296,  y: 1886 },
+  { model: 'mamba',  x: 1356, y: 2151 },
+  { model: 'kite',   x: 826,  y: 1621 },
+  { model: 'rondo',  x: 1886, y: 2151 },
+  { model: 'atlas',  x: 2280, y: 950 },
+];
 
 // Landmarks the player navigates by.
-SH.LANDMARKS = [
-  { name: 'SCPD Headquarters', x: 1898, y: 628, r: 90, color: '#2b3a55' },
-  { name: "Lou's Paint Shop", x: 628, y: 1898, r: 70, color: '#c25a7a' },
-  { name: 'Marina', x: 374, y: 2152, r: 90, color: '#2b7a8a' },
-  { name: 'Pier 9', x: 1136, y: 2152, r: 80, color: '#8a6a2b' },
-  { name: 'Cactus Court Plaza', x: 882, y: 374, r: 80, color: '#4a7a2b' },
-  { name: 'Old Town Market', x: 374, y: 1136, r: 70, color: '#7a4a2b' },
-  { name: 'Neon Strip', x: 2152, y: 374, r: 90, color: '#a03fd0' },
-  { name: 'Canal Row Marina', x: 2152, y: 2400, r: 80, color: '#19b8c4' },
-  { name: 'Sunset Hospital', x: 628, y: 374, r: 70, color: '#e8e8e8' }
+const LANDMARKS = {
+  scpdHq:     { x: 1356, y: 561,  label: 'SCPD Headquarters' },
+  paintShop:  { x: 561,  y: 561,  label: "Lou's Paint Shop" },
+  marina:     { x: 296,  y: 1091, label: 'Marina' },
+  pier9:      { x: 1091, y: 1091, label: 'Pier 9' },
+  plaza:      { x: 1091, y: 296,  label: 'Cactus Court Plaza' },
+  hospital:   { x: 561,  y: 296,  label: 'Solmar General Hospital' },
+  canalDepot: { x: 2280, y: 880,  label: 'Canal Row Depot' },
+};
+
+// 10 hidden Solmar coins on fixed grid cells, $75 each.
+const COIN_SPOTS = [
+  [296, 561], [826, 296], [1356, 826], [1886, 296], [2151, 561],
+  [561, 1091], [1091, 1621], [1621, 1886], [2151, 1356], [2280, 1500],
 ];
-SH.landmark = function (name) {
-  for (var i = 0; i < SH.LANDMARKS.length; i++) {
-    if (SH.LANDMARKS[i].name === name) return SH.LANDMARKS[i];
-  }
-  return null;
-};
 
-// Street ranks, in order. The last one is only for finishing the story.
-SH.RANKS = [
-  { score: 0, title: 'Street Rookie' },
-  { score: 400, title: 'Corner Hustler' },
-  { score: 1000, title: 'Mile Runner' },
-  { score: 2000, title: 'King of the Mile' },
-  { score: 3200, title: 'Night Operator' },
-  { score: 5000, title: 'Street Royalty' }
+const RANKS = [
+  'Small Timer', 'Wheelman', 'Street Hustler', 'Mile Runner',
+  'King of the Mile', 'Night Operator', 'Street Royalty', 'Solmar Legend',
 ];
-SH.rankFor = function (score, storyDone) {
-  if (storyDone) return 'Solmar Legend';
-  var title = SH.RANKS[0].title;
-  for (var i = 0; i < SH.RANKS.length; i++) {
-    if (score >= SH.RANKS[i].score) title = SH.RANKS[i].title;
-  }
-  return title;
-};
 
-// Wanted: heat 0..500, one star per 100. A star gained must land
-// mid-band (star * 100 + 50) so it never decays back the next frame.
-SH.HEAT_PER_STAR = 100;
-SH.MAX_HEAT = 500;
-SH.HEAT_DECAY = 4; // heat per second while laying low
-SH.starsOf = function (heat) {
-  return Math.max(0, Math.min(5, Math.floor(heat / SH.HEAT_PER_STAR)));
-};
-SH.gainStar = function (heat, star) {
-  return Math.max(heat, star * SH.HEAT_PER_STAR + 50);
-};
-
-// The seven story jobs. Lena Voss and the boss Kane carry the arc:
-// a getaway driver proves himself, runs errands, gets set up, and
-// finally steals Kane's ledger from SCPD Headquarters.
-SH.MISSIONS = [
+// The 7 story jobs. Steps are interpreted by the mission engine:
+// steal / reach / timedReach / pickup / deliver / follow / clearGuards / grab / escape.
+const JOBS = [
   {
-    id: 1, name: 'First Wheels', payout: 200, time: 120,
-    desc: 'Steal any car, then drive to Lena at Cactus Court Plaza.',
-    banner: 'Steal a car and meet Lena at Cactus Court Plaza.'
+    id: 1, name: 'First Wheels', pay: 200,
+    brief: 'Steal a car, then bring it to Lou\u2019s Paint Shop.',
+    steps: [
+      { type: 'steal', text: 'Steal any car (E)' },
+      { type: 'reach', x: 561, y: 561, r: 70, text: 'Drive to Lou\u2019s Paint Shop' },
+    ],
   },
   {
-    id: 2, name: "Lena's Escort", payout: 350, time: 120,
-    desc: 'Drive Lena to the Marina. Kane’s men are watching the roads.',
-    banner: 'Drive Lena to the Marina before the timer runs out.'
+    id: 2, name: 'Lena\u2019s Errand', pay: 350,
+    brief: 'Pick Lena Voss up at Cactus Court Plaza and get her to the Marina.',
+    steps: [
+      { type: 'reach', x: 1091, y: 296, r: 60, text: 'Meet Lena at Cactus Court Plaza' },
+      { type: 'timedReach', x: 296, y: 1091, r: 70, time: 60, text: 'Drive Lena to the Marina — 60s' },
+    ],
   },
   {
-    id: 3, name: 'The Voss Lift', payout: 500, time: 150,
-    desc: 'Steal the red Falco and deliver it to Cactus Court Plaza.',
-    banner: 'Steal the Falco and bring it to Cactus Court Plaza.'
+    id: 3, name: 'The Quiet Lift', pay: 500,
+    brief: 'The Vento taxi in Cactus Court belongs to Kane now. Take it east.',
+    steps: [
+      { type: 'stealModel', model: 'vento', text: 'Steal the Vento taxi in Cactus Court' },
+      { type: 'reach', x: 2151, y: 561, r: 70, text: 'Deliver the Vento to the east end of Neon Strip' },
+    ],
   },
   {
-    id: 4, name: 'Hot Pursuit', payout: 650, time: 75,
-    desc: 'Reach the Neon Strip in 75 seconds with at least 2 stars.',
-    banner: 'Reach the Neon Strip in 75 seconds. 2 stars and counting.'
+    id: 4, name: 'Hot Pursuit', pay: 650,
+    brief: 'Tail Kane\u2019s courier through the city. Stay close, don\u2019t spook him.',
+    steps: [
+      { type: 'follow', time: 20, maxDist: 260, text: 'Tail the courier car — stay within range for 20s' },
+      { type: 'reach', x: 1091, y: 1886, r: 70, text: 'Follow him to the Harbor Lights drop' },
+    ],
   },
   {
-    id: 5, name: 'The Setup', payout: 800, time: 180,
-    desc: 'Drop the package at SCPD Headquarters, then get back to Old Town Market.',
-    banner: 'Drop the package at SCPD Headquarters, then return to Old Town.'
+    id: 5, name: 'The Setup', pay: 800,
+    brief: 'Move a package from Old Town to Pier 9. Cops are watching — keep it smooth.',
+    steps: [
+      { type: 'pickup', x: 561, y: 1621, r: 60, text: 'Pick up the package in Old Town' },
+      { type: 'timedReach', x: 1091, y: 1091, r: 70, time: 75, text: 'Deliver to Pier 9 — 75s, stay out of trouble' },
+    ],
   },
   {
-    id: 6, name: 'Pier 9 Getaway', payout: 1200, time: 90,
-    desc: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
-    banner: 'Reach Pier 9 before the timer runs out. 3 stars from the start.'
+    id: 6, name: 'Pier 9 Getaway — Lena Voss', pay: 1200,
+    brief: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
+    steps: [
+      { type: 'timedReach', x: 1091, y: 1091, r: 70, time: 75, stars: 3,
+        text: 'Reach Pier 9 before the timer runs out. 3 stars from the start.' },
+    ],
   },
   {
-    id: 7, name: 'The Last Ledger', payout: 4000, time: 90,
-    desc: 'Steal Kane’s ledger from SCPD Headquarters, clear 3 guards, grab the ledger, then escape to the Marina in 90 seconds under a 4-star manhunt.',
-    banner: 'Steal the ledger from SCPD HQ. Clear the guards, grab it, run to the Marina.'
-  }
+    id: 7, name: 'The Last Ledger', pay: 4000,
+    brief: 'Steal Kane\u2019s ledger from SCPD Headquarters, then escape to the Marina.',
+    steps: [
+      { type: 'reach', x: 1356, y: 561, r: 90, text: 'Reach SCPD Headquarters' },
+      { type: 'clearGuards', text: 'Clear the 3 guards at HQ' },
+      { type: 'grab', x: 1356, y: 561, r: 55, text: 'Grab Kane\u2019s ledger' },
+      { type: 'escape', x: 296, y: 1091, r: 70, time: 90, stars: 4,
+        text: 'Escape to the Marina in 90s — 4-star manhunt!' },
+    ],
+  },
 ];
-SH.GUARD_DROP = 50; // each guard in job 7 drops $50: $4,000 + 3 x $50 = $4,150
 
-// Street races (round 5): three routes, one starter flag each.
-// Checkpoints must be driven through in order before the par time.
-SH.RACES = [
+// Street races: one route per district, checkpoints in order.
+const RACES = [
   {
-    id: 'sunset', name: 'Sunset Sprint', level: 'Easy', payout: 150, par: 75,
-    start: { x: 374, y: 374 },
+    id: 'sunset', name: 'Sunset Sprint', diff: 'Easy', pay: 150, par: 60,
+    start: { x: 296, y: 296 },
     checkpoints: [
-      { x: 374, y: 374 }, { x: 882, y: 374 }, { x: 882, y: 882 }, { x: 374, y: 882 }
-    ]
+      { x: 296, y: 1091 }, { x: 1091, y: 1091 }, { x: 1091, y: 296 },
+    ],
+    finish: { x: 296, y: 296 },
   },
   {
-    id: 'neon', name: 'Neon Circuit', level: 'Medium', payout: 300, par: 110,
-    start: { x: 2152, y: 374 },
+    id: 'neon', name: 'Neon Circuit', diff: 'Medium', pay: 300, par: 90,
+    start: { x: 1886, y: 296 },
     checkpoints: [
-      { x: 2152, y: 374 }, { x: 2152, y: 882 }, { x: 1644, y: 882 },
-      { x: 1644, y: 1390 }, { x: 2152, y: 1390 }, { x: 2152, y: 374 }
-    ]
+      { x: 1886, y: 1091 }, { x: 1091, y: 1091 }, { x: 1091, y: 1886 }, { x: 1886, y: 1886 },
+    ],
+    finish: { x: 1886, y: 296 },
   },
   {
-    id: 'canal', name: 'Canal Run', level: 'Hard', payout: 600, par: 150,
-    start: { x: 1898, y: 2152 },
+    id: 'canal', name: 'Canal Grand Tour', diff: 'Hard', pay: 600, par: 120,
+    start: { x: 2151, y: 296 },
     checkpoints: [
-      { x: 1898, y: 2152 }, { x: 2152, y: 2152 }, { x: 2152, y: 2400 },
-      { x: 1898, y: 2400 }, { x: 1898, y: 2152 }, { x: 1644, y: 2152 },
-      { x: 1644, y: 1898 }, { x: 1898, y: 1898 }
-    ]
-  }
+      { x: 2151, y: 1091 }, { x: 2151, y: 1886 }, { x: 1091, y: 1886 }, { x: 1091, y: 296 },
+    ],
+    finish: { x: 2151, y: 296 },
+  },
 ];
 
-// Delivery side job (round 5): pick the parcel up at Old Town Market,
-// run it to Pier 9 against the clock. Police spot you twice as fast
-// while you carry it.
-SH.DELIVERY = {
-  pickup: { x: 374, y: 1136 }, drop: { x: 1136, y: 2152 },
-  time: 100, payout: 250
+// Rival gangs for the turf system. The player starts holding Sunset Mile.
+const GANGS = {
+  player: { name: 'Solmar Kings', color: '#39d353' },
+  vipers: { name: 'Vipers', color: '#e33f2f' },
+  crows: { name: 'Crows', color: '#b06ae0' },
 };
-
-SH.FARE_MIN = 280; // taxi fares pay around $310
-SH.FARE_MAX = 340;
-SH.NEAR_MISS_VALUE = 15;
-SH.NEAR_MISS_COOLDOWN = 1.5;
-SH.DAMAGE_PER_HIT = 8; // car health lost per wall hit
-SH.SAVE_KEY = 'solmar-heat-save-v5';
-
+const TURF_START = {
+  'Sunset Mile': 'player',
+  'Cactus Court': 'vipers',
+  'Neon Strip': 'crows',
+  'Marina': 'vipers',
+  'Pier 9': 'crows',
+  'East Market': 'vipers',
+  'Canal Row': 'crows',
+  'Old Town': 'vipers',
+  'Harbor Lights': 'crows',
+  'Southgate': 'vipers',
+};

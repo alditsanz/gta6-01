@@ -1,66 +1,77 @@
-// Solmar Heat — races: three street-race routes with checkered-flag
-// starters. Enter a race, chase the checkpoints in order, beat the
-// par time and the purse is yours. Miss the par and you can retry.
-SH.raceAt = function (x, y) {
-  for (var i = 0; i < SH.RACES.length; i++) {
-    var r = SH.RACES[i];
-    if (SH.dist(x, y, r.start.x, r.start.y) < 70) return r;
-  }
-  return null;
-};
+// Solmar Heat — street races: three routes, one per district.
+// Enter a race at its checkered start, hit every checkpoint in order,
+// beat the par time and get paid. Fail and you can retry for free.
 
-// Press E on a starter flag to begin that route.
-SH.tryRace = function (S) {
-  var p = S.player;
-  if (S.race) return false;
-  var r = SH.raceAt(p.x, p.y);
-  if (!r) return false;
-  S.race = {
-    def: r, next: 0, timer: r.par,
-    done: false, failed: false
-  };
-  S.message = r.name + ' — beat ' + r.par + 's for $' + r.payout + '!';
-  S.messageT = 3;
-  SH.sfx('race');
-  return true;
-};
+const Races = {
+  race: null, // { def, cpIndex, timer, started }
+  results: {}, // raceId -> 'won' | 'lost'
 
-SH.updateRace = function (S, dt) {
-  if (!S.race || S.race.done || S.race.failed) return;
-  var r = S.race, p = S.player;
-  r.timer -= dt;
-  if (r.timer <= 0) {
-    r.failed = true;
-    S.message = 'Race over — par time missed. Retry at the flag.';
-    S.messageT = 3;
-    SH.sfx('fail');
-    S.race = null;
-    return;
-  }
-  var cp = r.def.checkpoints[r.next];
-  if (!cp) return;
-  if (SH.dist(p.x, p.y, cp.x, cp.y) < 62) {
-    r.next++;
-    SH.sfx('checkpoint');
-    if (r.next >= r.def.checkpoints.length) {
-      r.done = true;
-      S.money += r.def.payout;
-      S.score += 300;
-      S.racesWon = (S.racesWon || 0) + 1;
-      S.message = r.def.name + ' won! +$' + r.def.payout;
-      S.messageT = 3;
-      SH.sfx('cash');
-      S.race = null;
-      SH.saveGame(S);
-    } else {
-      S.message = 'Checkpoint ' + r.next + '/' + r.def.checkpoints.length;
-      S.messageT = 1.2;
+  init(saved) {
+    this.race = null;
+    this.results = saved || {};
+  },
+
+  startMarker(state) {
+    // Standing (in a car) on a race start line?
+    for (const def of RACES) {
+      if (dist(state.player.x, state.player.y, def.start.x, def.start.y) < 70) {
+        return def;
+      }
     }
-  }
-};
+    return null;
+  },
 
-// Where the next checkpoint is, for the HUD arrow and the minimap.
-SH.raceTarget = function (S) {
-  if (!S.race) return null;
-  return S.race.def.checkpoints[S.race.next] || null;
+  start(state, def) {
+    if (!state.car) {
+      state.toast = 'You need a car to race';
+      state.toastTimer = 1.5;
+      return false;
+    }
+    this.race = { def, cpIndex: 0, timer: def.par, started: true };
+    state.toast = `${def.name} — hit every checkpoint before the clock runs out!`;
+    state.toastTimer = 2.5;
+    AudioSys.sfx('race');
+    return true;
+  },
+
+  update(state, dt) {
+    const r = this.race;
+    if (!r) return;
+    r.timer -= dt;
+    const target = r.cpIndex < r.def.checkpoints.length
+      ? r.def.checkpoints[r.cpIndex]
+      : r.def.finish;
+    if (dist(state.player.x, state.player.y, target.x, target.y) < 60) {
+      r.cpIndex++;
+      AudioSys.sfx('checkpoint');
+      if (r.cpIndex > r.def.checkpoints.length) {
+        // Finished all checkpoints + the finish line.
+        state.money += r.def.pay;
+        state.score += 60;
+        this.results[r.def.id] = 'won';
+        state.toast = `${r.def.name} won! +$${r.def.pay}`;
+        state.toastTimer = 2.5;
+        AudioSys.sfx('cash');
+        this.race = null;
+        SaveGame.save(state);
+        return;
+      }
+      state.toast = `Checkpoint ${r.cpIndex}/${r.def.checkpoints.length}`;
+      state.toastTimer = 1;
+    }
+    if (r.timer <= 0) {
+      this.results[r.def.id] = 'lost';
+      state.toast = `${r.def.name} failed — too slow. Retry at the start line.`;
+      state.toastTimer = 2.5;
+      this.race = null;
+    }
+  },
+
+  // The point the HUD arrow and minimap should point at right now.
+  currentTarget() {
+    const r = this.race;
+    if (!r) return null;
+    if (r.cpIndex < r.def.checkpoints.length) return r.def.checkpoints[r.cpIndex];
+    return r.def.finish;
+  },
 };

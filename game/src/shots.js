@@ -1,58 +1,84 @@
-// Solmar Heat — shots: the four staged scenes the screenshots are
-// taken from. A `?shot=start|drive|chase|mission&seed=N` URL sets
-// the game up in that scene before the first frame is drawn.
-SH.applyShot = function (S, shot) {
-  var p = S.player;
-  if (shot === 'start') {
-    S.screen = 'title';
-    return;
-  }
-  S.screen = 'play';
-  if (shot === 'drive') {
-    // Cruising down Sunset Mile in the Falco.
-    var falco = S.cars[0];
-    p.car = falco;
-    p.x = falco.x; p.y = falco.y; p.angle = 0;
-    falco.x = 628; falco.y = 374; falco.angle = 0;
-    p.x = 628; p.y = 374;
-    p.speed = 190;
-    S.money = 1250;
-    S.score = 1450;
-    S.carsStolen = 1;
-    return;
-  }
-  if (shot === 'chase') {
-    // Job 6, Pier 9 Getaway, at full heat: 5 stars, cruisers,
-    // a roadblock ahead and the helicopter overhead.
-    SH.startMission(S, 6);
-    S.heat = 500;
-    S.lastCrimeT = S.time;
-    p.car = S.cars[0];
-    p.x = 1136; p.y = 1136; p.angle = 0;
-    p.speed = 210;
-    S.cars[0].x = 1136; S.cars[0].y = 1136;
-    S.mission.timer = 42;
-    SH.updatePolice(S, 0.1);
-    SH.updateHeli(S, 0.1);
-    SH.updateRoadblocks(S);
-    S.money = 2340;
-    S.score = 2600;
-    S.carsStolen = 1;
-    return;
-  }
-  if (shot === 'mission') {
-    // Job 7, The Last Ledger, at SCPD Headquarters: guards with
-    // health pips, the ledger to grab, 4 stars on the HUD.
-    SH.startMission(S, 7);
-    S.mission.stage = 1;
-    SH.spawnGuards(S, 1898, 628, 3);
-    S.heat = 450;
-    S.lastCrimeT = S.time;
-    p.x = 1760; p.y = 628; p.aim = 0;
-    p.ammo = 12; p.reserve = 48;
-    S.money = 3100;
-    S.score = 4200;
-    S.carsStolen = 3;
-    return;
-  }
+// Solmar Heat — shots: staging hooks the maker uses to set up
+// screenshots and play-tests from outside the game. Nothing here
+// changes how the game plays; it only lets a script put the game
+// into a state (night, 5 stars, a mission) and read it back.
+
+const Shots = {
+  install(state) {
+    const api = {
+      state: () => GameState,
+      // Put the game on the title screen.
+      title() { GameState.screen = 'title'; },
+      // Open the mission board.
+      board() { GameState.screen = 'board'; },
+      // Start playing, optionally at a position.
+      play(x, y) {
+        GameState.screen = 'play';
+        if (x !== undefined) { GameState.player.x = x; GameState.player.y = y; }
+      },
+      // Give the player a car and put them in it.
+      giveCar(modelId) {
+        const model = CAR_MODELS.find((m) => m.id === modelId) || CAR_MODELS[0];
+        const car = Cars.spawnCar(GameState, model, GameState.player.x + 40, GameState.player.y);
+        Cars.enter(GameState, car);
+      },
+      // Set the wanted level directly (0-5).
+      wanted(n) { Police.setStars(GameState, n); },
+      // Jump the clock: minutes since midnight (e.g. 1320 = 22:00).
+      clock(minutes) { DayNight.minutes = minutes % 1440; },
+      // Force the weather: 'clear' | 'rain' | 'fog'.
+      weather(w) { DayNight.weather = w; DayNight.weatherTimer = 9999; },
+      // Start a story job by id.
+      job(id) { Missions.start(GameState, id); },
+      // Start a race by id.
+      race(id) {
+        const def = RACES.find((r) => r.id === id);
+        if (def) {
+          GameState.player.x = def.start.x;
+          GameState.player.y = def.start.y;
+          this.giveCar('falco');
+          Races.start(GameState, def);
+        }
+      },
+      // Start a turf war in the player's current district.
+      turfWar() {
+        const name = World.districtAt(GameState.player.x, GameState.player.y);
+        const c = Turf.districtCenter(name);
+        GameState.player.x = c.x;
+        GameState.player.y = c.y;
+        Turf.tryStartWar(GameState);
+      },
+      // Teleport the player (keeps them in the world).
+      teleport(x, y) {
+        GameState.player.x = clamp(x, 20, CFG.world - 20);
+        GameState.player.y = clamp(y, 20, CFG.world - 20);
+        if (GameState.car) { GameState.car.x = GameState.player.x; GameState.car.y = GameState.player.y; }
+      },
+      // Read back a small summary for assertions.
+      summary() {
+        const s = GameState;
+        return {
+          screen: s.screen,
+          money: s.money,
+          stars: s.stars,
+          district: World.districtAt(s.player.x, s.player.y),
+          x: Math.round(s.player.x), y: Math.round(s.player.y),
+          mission: s.mission ? s.mission.job.id : null,
+          missionStep: s.mission ? s.mission.step : null,
+          jobsDone: s.jobsDone.slice(),
+          coins: Collectibles.count(),
+          turf: Turf.ownedCount(),
+          weather: DayNight.weather,
+          clock: DayNight.clockText(),
+          night: DayNight.isNight(),
+          heli: Heli.active,
+          roadblocks: Police.roadblocks.length,
+          policeCars: Police.cars.length,
+          inCar: !!s.car,
+          rank: RANKS[s.rank],
+        };
+      },
+    };
+    window.__solmar = api;
+  },
 };

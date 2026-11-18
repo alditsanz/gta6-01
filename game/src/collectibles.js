@@ -1,31 +1,37 @@
-// Solmar Heat — collectibles: the ten hidden Solmar coins. Walk
-// or drive over one and it pays $75, counts on the HUD and the
-// minimap, and stays collected in the save.
-SH.coinState = function () {
-  var got = [];
-  for (var i = 0; i < SH.COINS.length; i++) got.push(false);
-  return got;
-};
+// Solmar Heat — collectibles: the 10 hidden Solmar coins.
+// Fixed spots, $75 each, collected once and kept in the save.
 
-SH.checkCoins = function (S) {
-  var p = S.player;
-  for (var i = 0; i < SH.COINS.length; i++) {
-    if (S.coinsGot[i]) continue;
-    var c = SH.COINS[i];
-    if (SH.dist(p.x, p.y, c.x, c.y) < 34) {
-      S.coinsGot[i] = true;
-      S.money += SH.COIN_VALUE;
-      S.score += 100;
-      S.message = 'Solmar coin! +$' + SH.COIN_VALUE;
-      S.messageT = 2;
-      SH.sfx('coin');
-      SH.saveGame(S);
+const Collectibles = {
+  coins: [],
+
+  init(collectedIds) {
+    this.coins = COIN_SPOTS.map((spot, i) => ({
+      id: i,
+      x: spot[0],
+      y: spot[1],
+      taken: collectedIds ? collectedIds.includes(i) : false,
+    }));
+  },
+
+  takenIds() {
+    return this.coins.filter((c) => c.taken).map((c) => c.id);
+  },
+
+  count() { return this.coins.filter((c) => c.taken).length; },
+
+  update(state) {
+    const p = state.player;
+    for (const c of this.coins) {
+      if (c.taken) continue;
+      if (dist(p.x, p.y, c.x, c.y) < 30) {
+        c.taken = true;
+        state.money += CFG.coinValue;
+        state.score += 25;
+        state.toast = `Solmar coin +$${CFG.coinValue} (${this.count()}/10)`;
+        state.toastTimer = 2;
+        AudioSys.sfx('coin');
+        SaveGame.save(state);
+      }
     }
-  }
-};
-
-SH.coinsCollected = function (S) {
-  var n = 0;
-  for (var i = 0; i < S.coinsGot.length; i++) if (S.coinsGot[i]) n++;
-  return n;
+  },
 };

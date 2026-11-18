@@ -1,32 +1,40 @@
-// Solmar Heat — landmarks: what each named place does when the
-// player reaches it. The paint shop clears heat and repairs the
-// car; the hospital is where a WASTED player wakes up.
-SH.insideLandmark = function (lm, x, y, pad) {
-  return SH.dist(x, y, lm.x, lm.y) <= lm.r + (pad || 0);
-};
+// Solmar Heat — landmarks: the named places, Lou's Paint Shop
+// (clears heat + repairs the car) and the hospital respawn point.
 
-// Lou's Paint Shop: drive in and the heat is gone, the car is fixed.
-// Returns true when a repaint happened this frame.
-SH.paintShopVisit = function (S) {
-  var shop = SH.landmark("Lou's Paint Shop");
-  if (!shop) return false;
-  var p = S.player;
-  if (!SH.insideLandmark(shop, p.x, p.y, 0)) return false;
-  if (S.heat <= 0 && (!p.car || p.car.health >= 100)) return false;
-  S.heat = 0;
-  if (p.car) p.car.health = 100;
-  S.message = 'Fresh paint — heat cleared, car repaired.';
-  S.messageT = 2.5;
-  SH.sfx('paint');
-  return true;
-};
+const Landmarks = {
+  // True when the player (or their car) is inside the paint-shop yard.
+  atPaintShop(x, y) {
+    return dist(x, y, LANDMARKS.paintShop.x, LANDMARKS.paintShop.y) < 78;
+  },
 
-SH.hospitalSpot = function () {
-  var h = SH.landmark('Sunset Hospital');
-  return { x: h.x, y: h.y };
-};
+  // Driving into the yard with heat or damage spends nothing and
+  // clears both. Returns what it did, for the HUD toast.
+  usePaintShop(state) {
+    const hadHeat = state.heat > 0;
+    const car = state.car;
+    const hadDamage = car && car.health < CFG.carMaxHealth;
+    if (!hadHeat && !hadDamage) return null;
+    state.heat = 0;
+    state.stars = 0;
+    if (car) car.health = CFG.carMaxHealth;
+    state.paintCooldown = 2;
+    AudioSys.sfx('paint');
+    if (hadHeat && hadDamage) return "Lou's Paint Shop: heat cleared, car repaired";
+    if (hadHeat) return "Lou's Paint Shop: heat cleared";
+    return "Lou's Paint Shop: car repaired";
+  },
 
-// A point on the map the player is told to reach, with a label.
-SH.makeTarget = function (x, y, label) {
-  return { x: x, y: y, label: label };
+  hospitalRespawn(state) {
+    state.player.x = LANDMARKS.hospital.x;
+    state.player.y = LANDMARKS.hospital.y;
+    state.player.health = 100;
+    state.player.angle = 0;
+    state.car = null;
+    state.heat = 0;
+    state.stars = 0;
+    state.money = Math.max(0, state.money - CFG.hospitalFee);
+    state.screen = 'wasted';
+    state.wastedTimer = 2.2;
+    AudioSys.sfx('wasted');
+  },
 };

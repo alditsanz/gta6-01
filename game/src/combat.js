@@ -1,153 +1,176 @@
-// Solmar Heat — combat: shooting, punching, bullets and guards.
-// A bullet is tested along its whole path in small steps, so it
-// cannot tunnel past a thin target between frames.
-SH.spawnGuards = function (S, cx, cy, n) {
-  S.guards = [];
-  for (var i = 0; i < n; i++) {
-    var a = (i / n) * Math.PI * 2;
-    S.guards.push({
-      x: cx + Math.cos(a) * 70, y: cy + Math.sin(a) * 70,
-      hp: 3, maxHp: 3, shootT: 1 + i * 0.7, alive: true
-    });
-  }
-};
+// Solmar Heat — combat: shooting with ammo and reload, punching,
+// bullets that test their whole travel segment (no tunnelling past
+// thin targets), guards with health pips, and ammo pickups.
 
-// Fire one bullet from the player toward a world point.
-SH.shoot = function (S, tx, ty) {
-  var p = S.player;
-  if (p.ammo <= 0) { SH.sfx('dry'); return false; }
-  if (S.reloadT > 0) return false;
-  p.ammo--;
-  var a = SH.angleTo(p.x, p.y, tx, ty);
-  S.bullets.push({ x: p.x, y: p.y, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620, life: 1.2, fromPlayer: true });
-  SH.sfx('shot');
-  SH.addHeat(S, 12);
-  return true;
-};
+const Combat = {
+  bullets: [],
+  guards: [],
+  ammoPickups: [],
+  punchTimer: 0,
+  reloadTimer: 0,
 
-// Punch: a short-range swing on foot.
-SH.punch = function (S) {
-  var p = S.player;
-  if (p.punchT > 0 || S.reloadT > 0) return;
-  p.punchT = 0.35;
-  SH.sfx('punch');
-  for (var i = 0; i < S.guards.length; i++) {
-    var g = S.guards[i];
-    if (g.alive && SH.dist(p.x, p.y, g.x, g.y) < 46) {
-      g.hp--;
-      if (g.hp <= 0) SH.killGuard(S, g);
+  init() {
+    this.bullets = [];
+    this.guards = [];
+    this.ammoPickups = [];
+    this.punchTimer = 0;
+    this.reloadTimer = 0;
+    // A couple of ammo crates lying around the city.
+    this.ammoPickups = [
+      { x: 561, y: 826, taken: false },
+      { x: 1621, y: 1091, taken: false },
+      { x: 1091, y: 2151, taken: false },
+    ];
+  },
+
+  // Spawn the HQ guards for the ledger job.
+  spawnGuards() {
+    if (this.guards.length) return;
+    const base = LANDMARKS.scpdHq;
+    this.guards = [
+      { x: base.x - 46, y: base.y - 30, health: CFG.guardHealth, max: CFG.guardHealth, alive: true },
+      { x: base.x + 46, y: base.y - 30, health: CFG.guardHealth, max: CFG.guardHealth, alive: true },
+      { x: base.x, y: base.y + 52, health: CFG.guardHealth, max: CFG.guardHealth, alive: true },
+    ];
+  },
+
+  guardsAlive() { return this.guards.filter((g) => g.alive).length; },
+
+  // Distance from point (px,py) to segment (x1,y1)-(x2,y2).
+  segDist(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / len2;
+    t = clamp(t, 0, 1);
+    return dist(px, py, x1 + t * dx, y1 + t * dy);
+  },
+
+  shoot(state, tx, ty) {
+    const p = state.player;
+    if (state.car) return; // no drive-by shooting in this build
+    if (this.reloadTimer > 0) return;
+    if (state.ammo <= 0) {
+      AudioSys.sfx('dryfire');
+      this.startReload(state);
+      return;
     }
-  }
-};
+    state.ammo--;
+    const a = angleTo(p.x, p.y, tx, ty);
+    this.bullets.push({
+      x: p.x, y: p.y, vx: Math.cos(a) * CFG.bulletSpeed, vy: Math.sin(a) * CFG.bulletSpeed,
+      life: 1.2,
+    });
+    AudioSys.sfx('shot');
+    Police.addHeat(state, CFG.heatShot);
+  },
 
-SH.killGuard = function (S, g) {
-  g.alive = false;
-  S.money += SH.GUARD_DROP;
-  S.score += 150;
-  S.message = 'Guard down! +$' + SH.GUARD_DROP;
-  S.messageT = 2;
-  SH.sfx('guardDown');
-};
+  startReload(state) {
+    if (this.reloadTimer > 0 || state.ammo >= CFG.magSize || state.reserve <= 0) return;
+    this.reloadTimer = 1.1;
+    AudioSys.sfx('reload');
+  },
 
-// Step every bullet forward, testing its path in 4-unit steps so
-// nothing between frames is skipped.
-SH.updateBullets = function (S, dt) {
-  var p = S.player;
-  for (var i = S.bullets.length - 1; i >= 0; i--) {
-    var b = S.bullets[i];
-    b.life -= dt;
-    var steps = Math.ceil(SH.dist(0, 0, b.vx * dt, b.vy * dt) / 4) || 1;
-    var hit = false;
-    for (var s = 1; s <= steps; s++) {
-      var nx = b.x + (b.vx * dt * s) / steps;
-      var ny = b.y + (b.vy * dt * s) / steps;
-      for (var g = 0; g < S.guards.length; g++) {
-        var gd = S.guards[g];
-        if (!gd.alive) continue;
-        if (SH.dist(nx, ny, gd.x, gd.y) < 16) {
-          gd.hp--;
-          if (gd.hp <= 0) SH.killGuard(S, gd);
-          hit = true;
+  punch(state) {
+    if (this.punchTimer > 0 || state.car) return;
+    this.punchTimer = 0.35;
+    const p = state.player;
+    const reach = CFG.punchRange + 14;
+    // Guards in front take the hit.
+    for (const g of this.guards) {
+      if (!g.alive) continue;
+      if (dist(p.x, p.y, g.x, g.y) < reach) {
+        this.damageGuard(state, g, CFG.punchDamage);
+      }
+    }
+    // Pedestrians too — and the law notices.
+    for (const ped of World.peds) {
+      if (dist(p.x, p.y, ped.x, ped.y) < reach) {
+        ped.x += Math.cos(p.angle) * 60;
+        ped.y += Math.sin(p.angle) * 60;
+        Police.addHeat(state, CFG.heatKill);
+      }
+    }
+    AudioSys.sfx('punch');
+  },
+
+  damageGuard(state, g, dmg) {
+    g.health -= dmg;
+    if (g.health <= 0 && g.alive) {
+      g.alive = false;
+      g.health = 0;
+      state.money += 50; // guard drops
+      state.score += 40;
+      state.toast = 'Guard down — $50 dropped';
+      state.toastTimer = 1.6;
+      AudioSys.sfx('guardDown');
+    }
+  },
+
+  update(state, dt) {
+    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    if (this.reloadTimer > 0) {
+      this.reloadTimer -= dt;
+      if (this.reloadTimer <= 0) {
+        const need = CFG.magSize - state.ammo;
+        const take = Math.min(need, state.reserve);
+        state.ammo += take;
+        state.reserve -= take;
+      }
+    }
+    // Bullets: move in small steps and test the whole segment so a
+    // fast bullet cannot tunnel past a thin target.
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const b = this.bullets[i];
+      const nx = b.x + b.vx * dt, ny = b.y + b.vy * dt;
+      let dead = false;
+      for (const g of this.guards) {
+        if (!g.alive) continue;
+        if (this.segDist(g.x, g.y, b.x, b.y, nx, ny) < 20) {
+          this.damageGuard(state, g, CFG.bulletDamage);
+          dead = true;
           break;
         }
       }
-      if (hit) break;
-      // A bullet dies on a building.
-      if (SH.hitsBuilding(S.world, nx, ny, 2)) { hit = true; break; }
-    }
-    if (hit || b.life <= 0) { S.bullets.splice(i, 1); continue; }
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    // Enemy bullets (from guards) can hit the player.
-    if (!b.fromPlayer && SH.dist(b.x, b.y, p.x, p.y) < 14) {
-      SH.hurtPlayer(S, 10);
-      S.bullets.splice(i, 1);
-    }
-  }
-};
-
-// Guards stand their ground and shoot back at the player.
-SH.updateGuards = function (S, dt) {
-  var p = S.player;
-  for (var i = 0; i < S.guards.length; i++) {
-    var g = S.guards[i];
-    if (!g.alive) continue;
-    var d = SH.dist(p.x, p.y, g.x, g.y);
-    if (d < 420) {
-      g.shootT -= dt;
-      if (g.shootT <= 0) {
-        g.shootT = 1.6;
-        var a = SH.angleTo(g.x, g.y, p.x, p.y);
-        S.bullets.push({ x: g.x, y: g.y, vx: Math.cos(a) * 420, vy: Math.sin(a) * 420, life: 1.4, fromPlayer: false });
-        SH.sfx('shot');
+      if (!dead) {
+        for (const ped of World.peds) {
+          if (this.segDist(ped.x, ped.y, b.x, b.y, nx, ny) < 14) {
+            ped.x += Math.cos(Math.atan2(b.vy, b.vx)) * 80;
+            ped.y += Math.sin(Math.atan2(b.vy, b.vx)) * 80;
+            Police.addHeat(state, CFG.heatKill);
+            dead = true;
+            break;
+          }
+        }
+      }
+      b.x = nx; b.y = ny;
+      b.life -= dt;
+      if (dead || b.life <= 0 || b.x < 0 || b.y < 0 || b.x > CFG.world || b.y > CFG.world) {
+        this.bullets.splice(i, 1);
       }
     }
-  }
-};
-
-SH.hurtPlayer = function (S, dmg) {
-  var p = S.player;
-  if (S.screen !== 'play') return;
-  p.health -= dmg;
-  SH.sfx('hurt');
-  if (p.health <= 0) SH.wasted(S);
-};
-
-// Reload: R tops the magazine up from the reserve.
-SH.reload = function (S) {
-  var p = S.player;
-  if (S.reloadT > 0 || p.ammo >= 12 || p.reserve <= 0) return;
-  S.reloadT = 1.1;
-  SH.sfx('reload');
-};
-
-SH.finishReload = function (S) {
-  var p = S.player;
-  var need = 12 - p.ammo;
-  var take = Math.min(need, p.reserve);
-  p.ammo += take;
-  p.reserve -= take;
-};
-
-// Ammo pickups scattered on the map.
-SH.ammoSpots = function () {
-  return [
-    { x: 628, y: 882, taken: false }, { x: 1390, y: 1644, taken: false },
-    { x: 1898, y: 2152, taken: false }, { x: 374, y: 1390, taken: false }
-  ];
-};
-
-SH.checkAmmo = function (S) {
-  var p = S.player;
-  for (var i = 0; i < S.ammo.length; i++) {
-    var a = S.ammo[i];
-    if (a.taken) continue;
-    if (SH.dist(p.x, p.y, a.x, a.y) < 30) {
-      a.taken = true;
-      p.reserve += 24;
-      S.message = 'Ammo +24';
-      S.messageT = 1.5;
-      SH.sfx('coin');
+    // Ammo pickups.
+    for (const a of this.ammoPickups) {
+      if (a.taken) continue;
+      if (dist(state.player.x, state.player.y, a.x, a.y) < 28) {
+        a.taken = true;
+        state.reserve += 24;
+        state.toast = 'Ammo +24';
+        state.toastTimer = 1.5;
+        AudioSys.sfx('coin');
+      }
     }
-  }
+    // Guards shuffle toward the player when the ledger job is live.
+    const mission = state.mission;
+    if (mission && mission.job.id === 7 && mission.step >= 1) {
+      for (const g of this.guards) {
+        if (!g.alive) continue;
+        const d = dist(g.x, g.y, state.player.x, state.player.y);
+        if (d < 320 && d > 60) {
+          const a = angleTo(g.x, g.y, state.player.x, state.player.y);
+          g.x += Math.cos(a) * 55 * dt;
+          g.y += Math.sin(a) * 55 * dt;
+        }
+      }
+    }
+  },
 };

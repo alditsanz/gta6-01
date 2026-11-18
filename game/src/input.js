@@ -1,47 +1,55 @@
-// Solmar Heat — input: keyboard and mouse state, one object the
-// whole game reads. Keys are tracked by their `code` so WASD and
-// the arrow keys both work.
-SH.keys = {};
-SH.mouse = { x: 0, y: 0, down: false, clicked: false };
-SH.keyPressed = {}; // edge-triggered: true for one frame after a press
+// Solmar Heat — input: keyboard + mouse state, shared by every system.
+// Keys are tracked by their code so WASD and arrows both work.
 
-SH.initInput = function (canvas) {
-  window.addEventListener('keydown', function (e) {
-    if (!SH.keys[e.code]) SH.keyPressed[e.code] = true;
-    SH.keys[e.code] = true;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].indexOf(e.code) >= 0) {
-      e.preventDefault();
-    }
-  });
-  window.addEventListener('keyup', function (e) { SH.keys[e.code] = false; });
-  window.addEventListener('blur', function () { SH.keys = {}; });
-  canvas.addEventListener('mousemove', function (e) {
-    var r = canvas.getBoundingClientRect();
-    SH.mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
-    SH.mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
-  });
-  canvas.addEventListener('mousedown', function (e) {
-    SH.mouse.down = true; SH.mouse.clicked = true;
-    var r = canvas.getBoundingClientRect();
-    SH.mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
-    SH.mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
-  });
-  window.addEventListener('mouseup', function () { SH.mouse.down = false; });
-};
+const Input = {
+  keys: {},
+  mouseX: 0,
+  mouseY: 0,
+  mouseDown: false,
+  clicked: false,      // consumed by the game loop each frame
+  pressed: {},         // edge-triggered keys, consumed each frame
+  anyKey: false,
 
-SH.down = function () {
-  for (var i = 0; i < arguments.length; i++) {
-    if (SH.keys[arguments[i]]) return true;
-  }
-  return false;
-};
+  init(canvas) {
+    window.addEventListener('keydown', (e) => {
+      if (!this.keys[e.code]) this.pressed[e.code] = true;
+      this.keys[e.code] = true;
+      this.anyKey = true;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
+    canvas.addEventListener('mousemove', (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+    });
+    canvas.addEventListener('mousedown', (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+      if (e.button === 0) { this.mouseDown = true; this.clicked = true; }
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.mouseDown = false;
+    });
+    window.addEventListener('blur', () => { this.keys = {}; this.mouseDown = false; });
+  },
 
-SH.pressed = function (code) {
-  return !!SH.keyPressed[code];
-};
+  down(code) { return !!this.keys[code]; },
+  // Edge trigger: true only on the frame the key went down.
+  hit(code) { return !!this.pressed[code]; },
 
-// Call once per frame, after the game has read the edge triggers.
-SH.endFrameInput = function () {
-  SH.keyPressed = {};
-  SH.mouse.clicked = false;
+  get up() { return this.down('KeyW') || this.down('ArrowUp'); },
+  get dn() { return this.down('KeyS') || this.down('ArrowDown'); },
+  get lf() { return this.down('KeyA') || this.down('ArrowLeft'); },
+  get rt() { return this.down('KeyD') || this.down('ArrowRight'); },
+  get sprint() { return this.down('ShiftLeft') || this.down('ShiftRight'); },
+  get brake() { return this.down('Space'); },
+
+  endFrame() {
+    this.pressed = {};
+    this.clicked = false;
+  },
 };

@@ -1,137 +1,137 @@
-// Solmar Heat — police: pursuit cruisers on the road grid and the
-// roadblocks that appear from 4 stars. Pursuit uses a breadth-first
-// search from the player's intersection, so cruisers take real
-// routes instead of driving through buildings.
-SH.POLICE_SPEED = 185;
+// Solmar Heat — police: the 5-star wanted system, pursuit cars
+// that pathfind on the road grid (BFS over intersections), and
+// roadblocks from 4 stars up.
 
-// Grid node (intersection) nearest a point.
-SH.nodeOf = function (x, y) {
-  var ix = Math.round((x - SH.ROAD0) / SH.ROAD_STEP);
-  var iy = Math.round((y - SH.ROAD0) / SH.ROAD_STEP);
-  return {
-    x: SH.clamp(ix, 0, SH.GRID - 1),
-    y: SH.clamp(iy, 0, SH.GRID - 1)
-  };
-};
+const Police = {
+  cars: [],
+  roadblocks: [],
+  spawnTimer: 0,
+  repathTimer: 0,
+  quietTimer: 0, // seconds since the last crime
 
-// BFS distances over the intersection graph from one node.
-SH.bfsDist = function (sx, sy) {
-  var dist = [];
-  for (var y = 0; y < SH.GRID; y++) {
-    dist.push([]);
-    for (var x = 0; x < SH.GRID; x++) dist[y].push(-1);
-  }
-  dist[sy][sx] = 0;
-  var q = [[sx, sy]];
-  while (q.length) {
-    var cur = q.shift();
-    var cx = cur[0], cy = cur[1];
-    var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-    for (var i = 0; i < 4; i++) {
-      var nx = cx + dirs[i][0], ny = cy + dirs[i][1];
-      if (nx < 0 || ny < 0 || nx >= SH.GRID || ny >= SH.GRID) continue;
-      if (dist[ny][nx] >= 0) continue;
-      dist[ny][nx] = dist[cy][cx] + 1;
-      q.push([nx, ny]);
+  init() {
+    this.cars = [];
+    this.roadblocks = [];
+    this.spawnTimer = 0;
+    this.repathTimer = 0;
+    this.quietTimer = 0;
+  },
+
+  starsOf(heat) {
+    return Math.min(5, Math.floor(clamp(heat, 0, CFG.heatMax) / CFG.heatPerStar));
+  },
+
+  // Add heat; crossing into a new star band lands mid-band so the
+  // star cannot decay away the very next frame.
+  addHeat(state, amount) {
+    const before = this.starsOf(state.heat);
+    state.heat = clamp(state.heat + amount, 0, CFG.heatMax);
+    const after = this.starsOf(state.heat);
+    if (after > before) {
+      // Mid-band, but never past the cap (5 stars tops out at 500).
+      state.heat = Math.min(after * CFG.heatPerStar + CFG.heatPerStar / 2, CFG.heatMax);
     }
-  }
-  return dist;
-};
+    state.stars = after;
+    this.quietTimer = 0;
+  },
 
-// Add heat for a crime. Carrying a delivery parcel makes the
-// police spot you twice as fast.
-SH.addHeat = function (S, amount) {
-  var mult = S.delivery ? 2 : 1;
-  S.heat = Math.min(SH.MAX_HEAT, S.heat + amount * mult);
-  S.lastCrimeT = S.time;
-};
+  setStars(state, n) {
+    state.stars = clamp(n, 0, 5);
+    state.heat = Math.min(state.stars * CFG.heatPerStar + CFG.heatPerStar / 2, CFG.heatMax);
+    this.quietTimer = 0;
+  },
 
-// Wanted decays when the player lays low.
-SH.updateHeat = function (S, dt) {
-  if (S.time - S.lastCrimeT > 6) {
-    S.heat = Math.max(0, S.heat - SH.HEAT_DECAY * dt);
-  }
-};
+  update(state, dt) {
+    this.quietTimer += dt;
+    // Heat decays only once the player has laid low a few seconds.
+    if (this.quietTimer > 5 && state.heat > 0) {
+      state.heat = Math.max(0, state.heat - CFG.heatDecayPerSec * dt);
+      state.stars = this.starsOf(state.heat);
+    }
 
-// Keep the cruiser count matched to the stars, and steer each one
-// along the roads toward the player.
-SH.updatePolice = function (S, dt) {
-  var stars = SH.starsOf(S.heat);
-  var want = Math.min(stars, 5);
-  var p = S.player;
-  while (S.police.length < want) {
-    var a = Math.random() * Math.PI * 2;
-    S.police.push({
-      x: SH.clamp(p.x + Math.cos(a) * 700, 20, SH.WORLD - 20),
-      y: SH.clamp(p.y + Math.sin(a) * 700, 20, SH.WORLD - 20),
-      angle: 0, speed: 0
-    });
-  }
-  while (S.police.length > want) S.police.pop();
-  if (want === 0) { SH.updateRoadblocks(S); return; }
+    const want = state.stars;
+    // Spawn pursuit cars up to the wanted level's count.
+    this.spawnTimer -= dt;
+    if (this.cars.length < want && this.spawnTimer <= 0) {
+      this.spawnTimer = 2.5;
+      const edge = [
+        { x: 60, y: state.player.y }, { x: CFG.world - 60, y: state.player.y },
+        { x: state.player.x, y: 60 }, { x: state.player.x, y: CFG.world - 60 },
+      ][Math.floor(Math.random() * 4)];
+      this.cars.push({
+        x: clamp(edge.x, 40, CFG.world - 40), y: clamp(edge.y, 40, CFG.world - 40),
+        speed: 0, angle: 0, path: [], pathI: 0,
+      });
+    }
+    // Stand down when the heat is gone.
+    if (want === 0 && this.cars.length) {
+      this.cars = [];
+      this.roadblocks = [];
+    }
 
-  S.bfsT -= dt;
-  if (S.bfsT <= 0 || !S.bfs) {
-    S.bfsT = 0.5;
-    var node = SH.nodeOf(p.x, p.y);
-    S.bfs = SH.bfsDist(node.x, node.y);
-  }
-  for (var i = 0; i < S.police.length; i++) {
-    var c = S.police[i];
-    var cn = SH.nodeOf(c.x, c.y);
-    var cx = SH.roadAt(cn.x), cy = SH.roadAt(cn.y);
-    var target = null;
-    var best = S.bfs[cn.y][cn.x];
-    var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-    for (var d = 0; d < 4; d++) {
-      var nx = cn.x + dirs[d][0], ny = cn.y + dirs[d][1];
-      if (nx < 0 || ny < 0 || nx >= SH.GRID || ny >= SH.GRID) continue;
-      if (S.bfs[ny][nx] >= 0 && S.bfs[ny][nx] < best) {
-        best = S.bfs[ny][nx];
-        target = { x: SH.roadAt(nx), y: SH.roadAt(ny) };
+    // Re-path every second toward the player's nearest intersection.
+    this.repathTimer -= dt;
+    if (this.repathTimer <= 0) {
+      this.repathTimer = 1;
+      for (const c of this.cars) {
+        c.path = World.findPath(c.x, c.y, state.player.x, state.player.y);
+        c.pathI = 0;
       }
     }
-    if (!target) target = { x: p.x, y: p.y };
-    // Drive to the next intersection, then on toward the player.
-    var tx = target.x, ty = target.y;
-    if (SH.dist(c.x, c.y, cx, cy) > 30) { tx = cx; ty = cy; }
-    var ang = SH.angleTo(c.x, c.y, tx, ty);
-    c.angle = SH.turnToward(c.angle, ang, 3.2 * dt);
-    c.speed = SH.POLICE_SPEED;
-    c.x += Math.cos(c.angle) * c.speed * dt;
-    c.y += Math.sin(c.angle) * c.speed * dt;
-    c.x = SH.clamp(c.x, 10, SH.WORLD - 10);
-    c.y = SH.clamp(c.y, 10, SH.WORLD - 10);
-    // Ramming the player hurts.
-    if (SH.dist(c.x, c.y, p.x, p.y) < 30) {
-      if (S.time - (S.lastRamT || -9) > 1) {
-        S.lastRamT = S.time;
-        SH.hurtPlayer(S, 5);
-        SH.sfx('crash');
+
+    // Drive the path, then close in directly.
+    for (const c of this.cars) {
+      const maxSpd = 300 + want * 18;
+      let tx = state.player.x, ty = state.player.y;
+      if (c.pathI < c.path.length) {
+        tx = c.path[c.pathI].x; ty = c.path[c.pathI].y;
+        if (dist(c.x, c.y, tx, ty) < 24) c.pathI++;
+      }
+      const target = angleTo(c.x, c.y, tx, ty);
+      c.angle += clamp(angleDiff(c.angle, target), -2.4 * dt, 2.4 * dt);
+      c.speed = lerp(c.speed, maxSpd, dt * 0.8);
+      c.x += Math.cos(c.angle) * c.speed * dt;
+      c.y += Math.sin(c.angle) * c.speed * dt;
+      c.x = clamp(c.x, 20, CFG.world - 20);
+      c.y = clamp(c.y, 20, CFG.world - 20);
+      // Ramming the player hurts and spikes the heat.
+      if (dist(c.x, c.y, state.player.x, state.player.y) < 34) {
+        if (state.car) {
+          state.car.health -= 6;
+          if (state.car.health <= 0) Cars.wreck(state);
+        } else {
+          state.player.health -= 12;
+          if (state.player.health <= 0) Landmarks.hospitalRespawn(state);
+        }
+        c.x -= Math.cos(c.angle) * 40;
+        c.y -= Math.sin(c.angle) * 40;
+        this.addHeat(state, 6);
       }
     }
-  }
-  SH.updateRoadblocks(S);
-};
 
-// From 4 stars, two parked cruisers with striped barriers block
-// the road ahead of the player. They clear when the heat drops.
-SH.updateRoadblocks = function (S) {
-  var stars = SH.starsOf(S.heat);
-  if (stars >= 4) {
-    if (S.roadblocks.length === 0) {
-      var p = S.player;
-      var fx = Math.cos(p.angle || 0), fy = Math.sin(p.angle || 0);
-      var bx = SH.clamp(p.x + fx * 320, 40, SH.WORLD - 40);
-      var by = SH.clamp(p.y + fy * 320, 40, SH.WORLD - 40);
-      var perp = Math.atan2(fy, fx) + Math.PI / 2;
-      S.roadblocks = [
-        { x: bx + Math.cos(perp) * 26, y: by + Math.sin(perp) * 26, angle: perp },
-        { x: bx - Math.cos(perp) * 26, y: by - Math.sin(perp) * 26, angle: perp }
+    // Roadblocks from 4 stars: two cruisers + barriers across the
+    // road ahead of the player. They clear when heat drops.
+    if (want >= 4 && this.roadblocks.length === 0) {
+      const p = state.player;
+      const ahead = p.angle || 0;
+      const bx = p.x + Math.cos(ahead) * 320;
+      const by = p.y + Math.sin(ahead) * 320;
+      this.roadblocks = [
+        { x: bx - 30, y: by - 30, angle: ahead + Math.PI / 2 },
+        { x: bx + 30, y: by + 30, angle: ahead + Math.PI / 2 },
       ];
-      SH.sfx('siren');
+      AudioSys.sfx('roadblock');
+    } else if (want < 4 && this.roadblocks.length) {
+      this.roadblocks = [];
     }
-  } else {
-    S.roadblocks = [];
-  }
+    // Touching a roadblock cruiser wrecks the car fast.
+    for (const rb of this.roadblocks) {
+      if (state.car && dist(state.car.x, state.car.y, rb.x, rb.y) < 30) {
+        state.car.health -= 20;
+        state.car.x -= Math.cos(state.player.angle) * 50;
+        state.car.y -= Math.sin(state.player.angle) * 50;
+        if (state.car.health <= 0) Cars.wreck(state);
+      }
+    }
+  },
 };
