@@ -1,809 +1,467 @@
-// Solmar Heat — the game itself: state, the fixed-step loop, the story
-// missions, the wanted system, police and roadblocks, WASTED and respawn,
-// and the save. No DOM access at import time: boot() wires the browser in.
-
-import {
-  STEP, VIEW, WORLD, PLAYER, CAR, WANTED, COMBAT, MISSIONS, LANDMARKS,
-  GUARD_DROP, roadAt, clampToWorld, districtAt,
-} from './config.js';
-import { createRandom } from './random.js';
-import { createInput } from './input.js';
-import {
-  buildCity, spawnParkedCars, spawnTraffic, spawnPedestrians,
-  updateTraffic, updatePedestrians, spawnPoliceCar, updatePoliceCar,
-  hitsBuilding, nearestRoadIndex,
-} from './world.js';
-import { insideZone } from './landmarks.js';
-import { createCoins, collectCoins, restoreCoins, takenCoinIds, coinsGot } from './collectibles.js';
-import {
-  startFare, updateFare, farePayout, nearMissCheck,
-  damageCarFromWall, canEnterCar, paintShopService,
-} from './sidejobs.js';
-import {
-  createWeapon, fireWeapon, startReload, tickWeapon, updateBullets,
-  punch, spawnGuards, updateGuards, createAmmoPickup,
-} from './combat.js';
-import { createSound } from './audio.js';
-import { createRenderer, SCREEN_TITLE, SCREEN_BOARD, SCREEN_PLAY, SCREEN_PAUSED, SCREEN_WASTED, SCREEN_COMPLETE } from './render.js';
-import { stageShot } from './shots.js';
-
-export const SAVE_KEY = 'solmar-heat-save-v1';
-
-/** Stars for a heat value: a star every 20 heat, capped at 5. */
-export function starsForHeat(heat) {
-  return Math.max(0, Math.min(5, Math.floor(heat / WANTED.perStar)));
-}
-
-/**
- * Add heat from a crime. A star gained lands mid-band (boundary + 10),
- * never exactly on a boundary that would decay back the next frame.
- */
-export function addHeat(state, amount) {
-  const before = state.stars;
-  state.heat = Math.min(WANTED.maxHeat, state.heat + amount);
-  const now = starsForHeat(state.heat);
-  if (now > before) {
-    state.heat = Math.min(WANTED.maxHeat, now * WANTED.perStar + WANTED.midBand);
-    state.stars = now;
+// Solmar Heat — main: game state, the loop, the player, the cars
+// and the seven story jobs. Everything else is a system this file
+// calls once a frame.
+SH.newGame = function (seed) {
+  var world = SH.buildWorld(seed);
+  var cars = [];
+  for (var i = 0; i < SH.CAR_SPOTS.length; i++) {
+    var spot = SH.CAR_SPOTS[i];
+    var model = SH.CARS[spot.model];
+    cars.push({
+      model: spot.model, modelName: model.name, color: model.color,
+      top: model.top, accel: model.accel,
+      x: spot.x, y: spot.y, angle: 0, health: 100, totaled: false
+    });
   }
-  state.lastCrimeT = state.time;
-}
-
-/** Fresh game state for a seed. Nothing here reads the browser. */
-export function createGame(seed) {
-  const rng = createRandom(seed);
-  const city = buildCity(rng);
-  const cars = spawnParkedCars(rng);
-  const traffic = spawnTraffic(rng, 14);
-  const peds = spawnPedestrians(rng, 22);
-  const pickups = [
-    createAmmoPickup(roadAt(2), roadAt(5)),
-    createAmmoPickup(roadAt(6), roadAt(2)),
-    createAmmoPickup(roadAt(4), roadAt(7)),
-  ];
-  return {
-    seed,
-    rng,
-    time: 0,
-    screen: SCREEN_TITLE,
-    city,
-    cars,
-    traffic,
-    peds,
-    police: [],
-    roadblocks: [],
-    bullets: [],
-    guards: [],
-    pickups,
-    coins: createCoins(),
-    player: { x: LANDMARKS.plaza.x, y: LANDMARKS.plaza.y + 90, angle: -Math.PI / 2, health: PLAYER.health, inCar: false, car: null },
-    weapon: createWeapon(),
-    money: 0,
-    score: 0,
-    carsStolen: 0,
-    faresDone: 0,
-    nearMisses: 0,
-    heat: 0,
-    stars: 0,
-    lastCrimeT: -999,
-    lastNearMiss: -999,
-    mission: null,
-    missionsDone: [false, false, false, false, false, false, false],
-    storyComplete: false,
-    fare: null,
-    toast: null,
-    rank: 0,
-    muted: false,
-    saveExists: false,
-    saveT: 0,
-    spawnT: 0,
-    sfx: null,
+  var S = {
+    seed: seed, world: world, cars: cars,
+    screen: 'title', time: 0,
+    money: 0, score: 0, carsStolen: 0, fares: 0, nearMisses: 0,
+    racesWon: 0, completed: [], storyDone: false,
+    coinsGot: SH.coinState(),
+    heat: 0, lastCrimeT: -99,
+    player: {
+      x: 628, y: 628, angle: 0, aim: 0, speed: 0,
+      health: 100, ammo: 12, reserve: 48, car: null, punchT: 0
+    },
+    police: [], roadblocks: [], heli: { active: false, x: 0, y: 0, angle: 0 },
+    bfs: null, bfsT: 0, lastRamT: -9,
+    bullets: [], guards: [], ammo: SH.ammoSpots(),
+    mission: null, taxi: null, delivery: null, race: null,
+    lastNearMiss: -9, message: '', messageT: 0, reloadT: 0,
+    channelT: 0
   };
-}
+  SH.loadSave(S);
+  return S;
+};
 
-/** The save payload: money, progress, coins, rank. */
-export function serializeSave(state) {
-  return {
-    money: state.money,
-    score: state.score,
-    carsStolen: state.carsStolen,
-    faresDone: state.faresDone,
-    nearMisses: state.nearMisses,
-    missionsDone: state.missionsDone,
-    coinsTaken: takenCoinIds(state.coins),
-    rank: state.rank,
-  };
-}
-
-/** Apply a loaded save payload onto fresh state. */
-export function applySave(state, data) {
-  if (!data || typeof data !== 'object') return false;
-  if (typeof data.money === 'number') state.money = data.money;
-  if (typeof data.score === 'number') state.score = data.score;
-  if (typeof data.carsStolen === 'number') state.carsStolen = data.carsStolen;
-  if (typeof data.faresDone === 'number') state.faresDone = data.faresDone;
-  if (typeof data.nearMisses === 'number') state.nearMisses = data.nearMisses;
-  if (Array.isArray(data.missionsDone)) {
-    for (let i = 0; i < 7; i++) state.missionsDone[i] = !!data.missionsDone[i];
-  }
-  if (Array.isArray(data.coinsTaken)) restoreCoins(state.coins, data.coinsTaken);
-  state.rank = state.missionsDone.filter(Boolean).length;
-  state.storyComplete = state.missionsDone[6] === true;
-  state.saveExists = true;
-  return true;
-}
-
-export function setToast(state, text, good) {
-  state.toast = { text, t: state.time, good: !!good };
-}
-
-function nearestCar(state, x, y) {
-  let best = null;
-  let bestD = Infinity;
-  for (const car of state.cars) {
-    const d = Math.hypot(car.x - x, car.y - y);
-    if (d < bestD) {
-      bestD = d;
-      best = car;
-    }
-  }
-  return { car: best, distance: bestD };
-}
-
-/** Start a story job by id (1..7). Returns false when locked or busy. */
-export function startMission(state, id) {
-  if (state.mission) return false;
-  if (id < 1 || id > 7) return false;
-  if (id > 1 && !state.missionsDone[id - 2]) return false;
-  const def = MISSIONS[id - 1];
-  const mission = { def, id, phase: 'start', t: def.timer, countdown: def.timer > 0, target: null, courier: null, rams: 0, ramT: 0 };
-  if (id === 1) {
-    const { car } = nearestCar(state, state.player.x, state.player.y);
-    mission.target = car ? { x: car.x, y: car.y, label: car.model } : { x: LANDMARKS.plaza.x, y: LANDMARKS.plaza.y };
-    mission.phase = 'steal';
-  } else if (id === 2) {
-    mission.phase = 'pickup';
-    mission.target = { x: LANDMARKS.plaza.x, y: LANDMARKS.plaza.y, label: 'Lena' };
-  } else if (id === 3) {
-    const vento = state.cars.find((c) => c.model === 'Vento');
-    mission.target = vento ? { x: vento.x, y: vento.y, label: 'Vento' } : { x: LANDMARKS.marina.x, y: LANDMARKS.marina.y };
-    mission.phase = 'steal';
-  } else if (id === 4) {
-    const px = state.player.x;
-    const py = state.player.y;
-    const ahead = { x: clampToWorld(px + 500), y: roadAt(nearestRoadIndex(py)) };
-    mission.courier = {
-      x: ahead.x, y: ahead.y, angle: 0, speed: 210, color: '#4d7cfe',
-      model: 'Comet', health: 100, wrecked: false, stopped: false,
-    };
-    mission.phase = 'chase';
-    mission.target = { x: ahead.x, y: ahead.y, label: 'Courier' };
-  } else if (id === 5) {
-    mission.phase = 'deliver';
-    mission.target = { x: LANDMARKS.pier.x, y: LANDMARKS.pier.y, label: 'Pier 9' };
-  } else if (id === 6) {
-    mission.phase = 'reach';
-    mission.target = { x: LANDMARKS.pier.x, y: LANDMARKS.pier.y, label: 'Pier 9' };
-  } else if (id === 7) {
-    state.guards = spawnGuards(LANDMARKS.hq.x, LANDMARKS.hq.y);
-    mission.phase = 'clear';
-    mission.target = { x: LANDMARKS.hq.x, y: LANDMARKS.hq.y, label: 'SCPD HQ' };
-    mission.countdown = false;
-    mission.t = 0;
-  }
-  if (def.startStars > 0) {
-    state.heat = def.startStars * WANTED.perStar + WANTED.midBand;
-    state.stars = def.startStars;
-    state.lastCrimeT = state.time;
-  }
-  state.mission = mission;
-  setToast(state, `Job ${def.id}: ${def.title}`, true);
-  return true;
-}
-
-/** A job is done: pay out, advance the story, save. */
-export function completeMission(state) {
-  const m = state.mission;
-  if (!m) return;
-  const payout = m.def.payout;
-  state.money += payout;
-  state.score += payout * 2;
-  state.missionsDone[m.id - 1] = true;
-  state.rank = state.missionsDone.filter(Boolean).length;
-  state.mission = null;
-  state.guards = [];
-  setToast(state, `Job complete! +$${payout.toLocaleString('en-US')}`, true);
-  if (state.sfx) state.sfx.missionDone();
-  if (m.id === 7) {
-    state.storyComplete = true;
-    state.screen = SCREEN_COMPLETE;
-  }
-  saveNow(state);
-}
-
-export function failMission(state, reason) {
-  state.mission = null;
-  state.guards = [];
-  setToast(state, reason || 'Job failed.', false);
-}
-
-/** Persist the save to localStorage when the browser has one. */
-export function saveNow(state) {
+// ---- save --------------------------------------------------------------
+SH.saveGame = function (S) {
   try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify(serializeSave(state)));
-    }
-  } catch {
-    // Storage may be unavailable; the game plays on regardless.
-  }
-}
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(SH.SAVE_KEY, JSON.stringify({
+      money: S.money, score: S.score, completed: S.completed,
+      coinsGot: S.coinsGot, racesWon: S.racesWon, fares: S.fares,
+      storyDone: S.storyDone, carsStolen: S.carsStolen
+    }));
+  } catch (e) { /* saving is best-effort */ }
+};
 
-/** Load a save from localStorage, or null. */
-export function loadSave() {
+SH.loadSave = function (S) {
   try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      const raw = window.localStorage.getItem(SAVE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
+    if (typeof localStorage === 'undefined') return;
+    var raw = localStorage.getItem(SH.SAVE_KEY);
+    if (!raw) return;
+    var d = JSON.parse(raw);
+    if (typeof d.money === 'number') S.money = d.money;
+    if (typeof d.score === 'number') S.score = d.score;
+    if (Array.isArray(d.completed)) S.completed = d.completed;
+    if (Array.isArray(d.coinsGot) && d.coinsGot.length === SH.COINS.length) S.coinsGot = d.coinsGot;
+    if (typeof d.racesWon === 'number') S.racesWon = d.racesWon;
+    if (typeof d.fares === 'number') S.fares = d.fares;
+    if (d.storyDone) S.storyDone = true;
+    if (typeof d.carsStolen === 'number') S.carsStolen = d.carsStolen;
+  } catch (e) { /* a bad save never breaks the game */ }
+};
 
-/** Steal the nearest car, or step out of the one being driven. */
-export function toggleCar(state) {
-  const p = state.player;
-  if (p.inCar && p.car) {
-    const car = p.car;
-    p.inCar = false;
-    p.car = null;
-    p.x = clampToWorld(car.x + Math.cos(car.angle + Math.PI / 2) * 34);
-    p.y = clampToWorld(car.y + Math.sin(car.angle + Math.PI / 2) * 34);
-    p.angle = car.angle;
-    car.speed = 0;
-    return 'exit';
+// ---- missions ----------------------------------------------------------
+SH.startMission = function (S, id) {
+  var def = null;
+  for (var i = 0; i < SH.MISSIONS.length; i++) {
+    if (SH.MISSIONS[i].id === id) def = SH.MISSIONS[i];
   }
-  const { car, distance } = nearestCar(state, p.x, p.y);
-  if (!car || distance > 52) return 'none';
-  if (!canEnterCar(car)) {
-    setToast(state, 'That car is totaled — it will never drive again.', false);
-    return 'wrecked';
-  }
-  p.inCar = true;
-  p.car = car;
-  p.x = car.x;
-  p.y = car.y;
-  if (!car.stolen) {
-    car.stolen = true;
-    state.carsStolen += 1;
-    state.score += 25;
-    addHeat(state, WANTED.stealHeat);
-  }
-  if (state.sfx) state.sfx.pickup();
-  return 'steal';
-}
+  if (!def) return false;
+  S.mission = { def: def, id: id, stage: 0, timer: def.time, target: null, channelT: 0 };
+  if (id === 4) S.heat = SH.gainStar(S.heat, 2);
+  if (id === 6) S.heat = SH.gainStar(S.heat, 3);
+  S.lastCrimeT = S.time;
+  S.message = def.name + ' — ' + def.banner;
+  S.messageT = 3;
+  SH.sfx('mission');
+  SH.updateMissionTarget(S);
+  return true;
+};
 
-/** Move the player on foot, sliding along buildings. */
-function moveOnFoot(state, vx, vy, dt) {
-  const p = state.player;
-  const nx = clampToWorld(p.x + vx * dt);
-  if (!hitsBuilding(state.city, nx, p.y, PLAYER.radius)) p.x = nx;
-  const ny = clampToWorld(p.y + vy * dt);
-  if (!hitsBuilding(state.city, p.x, ny, PLAYER.radius)) p.y = ny;
-}
-
-/** Drive the player's car: accel, steering, handbrake, wall hits. */
-function driveCar(state, input, dt) {
-  const p = state.player;
-  const car = p.car;
-  const mv = input.moveVector();
-  const handbrake = input.down('Space');
-  if (mv.y < 0) car.speed += CAR.accel * dt;
-  else if (mv.y > 0) {
-    if (car.speed > 0) car.speed -= CAR.brake * dt;
-    else car.speed -= CAR.accel * 0.6 * dt;
-  } else {
-    car.speed -= car.speed * CAR.drag * dt;
-    if (Math.abs(car.speed) < 4) car.speed = 0;
-  }
-  if (handbrake) {
-    car.speed -= car.speed * 2.2 * dt;
-  }
-  car.speed = Math.max(-CAR.reverseMax, Math.min(CAR.maxSpeed, car.speed));
-  const speedRatio = Math.min(1, Math.abs(car.speed) / 220);
-  const steer = mv.x * CAR.turnRate * speedRatio * (handbrake ? CAR.handbrakeTurn : 1);
-  car.angle += steer * dt * (car.speed < 0 ? -1 : 1);
-  const nx = car.x + Math.cos(car.angle) * car.speed * dt;
-  const ny = car.y + Math.sin(car.angle) * car.speed * dt;
-  const frontX = nx + Math.cos(car.angle) * 22;
-  const frontY = ny + Math.sin(car.angle) * 22;
-  if (hitsBuilding(state.city, frontX, frontY, 10) || nx < 24 || nx > WORLD.size - 24 || ny < 24 || ny > WORLD.size - 24) {
-    if (Math.abs(car.speed) > 120 && (!car.hitT || state.time - car.hitT > 0.5)) {
-      car.hitT = state.time;
-      const totaled = damageCarFromWall(car);
-      if (state.sfx) state.sfx.crash();
-      setToast(state, totaled ? 'Car totaled!' : `Car damaged — ${car.health}% left`, false);
-      if (totaled && p.inCar) {
-        p.inCar = false;
-        p.car = null;
-        p.x = clampToWorld(car.x + 34);
-        p.y = clampToWorld(car.y + 34);
-      }
-    }
-    car.speed *= -0.3;
-  } else {
-    car.x = clampToWorld(nx);
-    car.y = clampToWorld(ny);
-  }
-  p.x = car.x;
-  p.y = car.y;
-  p.angle = car.angle;
-  // Bump into traffic: a nudge, not a pile-up.
-  for (const t of state.traffic) {
-    if (Math.hypot(t.x - car.x, t.y - car.y) < 34) {
-      t.x += (t.x - car.x) * 0.4;
-      t.y += (t.y - car.y) * 0.4;
-      if (Math.abs(car.speed) > 60) car.speed *= 0.7;
-    }
-  }
-  // Roadblock crash.
-  for (const rb of state.roadblocks) {
-    if (Math.hypot(rb.x - car.x, rb.y - car.y) < 46) {
-      car.speed = 0;
-      car.x = clampToWorld(car.x - Math.cos(car.angle) * 40);
-      car.y = clampToWorld(car.y - Math.sin(car.angle) * 40);
-      damageCarFromWall(car);
-      if (state.sfx) state.sfx.crash();
-      setToast(state, 'Roadblock! You smashed into the barrier.', false);
-    }
-  }
-}
-
-/** One mission step. */
-function updateMission(state, dt) {
-  const m = state.mission;
+SH.updateMissionTarget = function (S) {
+  var m = S.mission;
   if (!m) return;
-  const p = state.player;
-  if (m.countdown) {
-    m.t -= dt;
-    if (m.t <= 0) {
-      m.t = 0;
-      failMission(state, 'Job failed — the clock ran out.');
-      return;
-    }
+  var plaza = SH.landmark('Cactus Court Plaza');
+  var marina = SH.landmark('Marina');
+  var hq = SH.landmark('SCPD Headquarters');
+  var neon = SH.landmark('Neon Strip');
+  var pier = SH.landmark('Pier 9');
+  var market = SH.landmark('Old Town Market');
+  switch (m.id) {
+    case 1:
+      m.target = m.stage === 0 ? null : SH.makeTarget(plaza.x, plaza.y, 'Lena');
+      break;
+    case 2: m.target = SH.makeTarget(marina.x, marina.y, 'Marina'); break;
+    case 3:
+      m.target = m.stage === 0 ? SH.makeTarget(S.cars[0].x, S.cars[0].y, 'Falco')
+        : SH.makeTarget(plaza.x, plaza.y, 'Plaza');
+      break;
+    case 4: m.target = SH.makeTarget(neon.x, neon.y, 'Neon Strip'); break;
+    case 5:
+      m.target = m.stage <= 1 ? SH.makeTarget(hq.x, hq.y, 'SCPD HQ')
+        : SH.makeTarget(market.x, market.y, 'Old Town');
+      break;
+    case 6: m.target = SH.makeTarget(pier.x, pier.y, 'Pier 9'); break;
+    case 7:
+      m.target = m.stage <= 2 ? SH.makeTarget(hq.x, hq.y, 'SCPD HQ')
+        : SH.makeTarget(marina.x, marina.y, 'Marina');
+      break;
+    default: m.target = null;
   }
-  const near = (x, y, r) => Math.hypot(p.x - x, p.y - y) < r;
-  if (m.id === 1) {
-    if (m.phase === 'steal' && p.inCar) {
-      m.phase = 'deliver';
-      m.target = { x: LANDMARKS.plaza.x, y: LANDMARKS.plaza.y, label: 'Lena' };
-      setToast(state, 'Now drive to Lena at Cactus Court Plaza.', true);
-    } else if (m.phase === 'deliver' && p.inCar && near(LANDMARKS.plaza.x, LANDMARKS.plaza.y, 90)) {
-      completeMission(state);
-    }
-  } else if (m.id === 2) {
-    if (m.phase === 'pickup' && near(LANDMARKS.plaza.x, LANDMARKS.plaza.y, 44)) {
-      m.phase = 'drive';
-      m.target = { x: 1895, y: 103, label: 'Neon Strip Hotel' };
-      setToast(state, 'Lena is in. Drive to the Neon Strip hotel!', true);
-    } else if (m.phase === 'drive' && near(1895, 103, 70)) {
-      completeMission(state);
-    }
-  } else if (m.id === 3) {
-    const vento = state.cars.find((c) => c.model === 'Vento');
-    if (m.phase === 'steal' && p.inCar && p.car === vento) {
-      m.phase = 'deliver';
-      m.target = { x: LANDMARKS.paint.x, y: LANDMARKS.paint.y, label: "Lou's Paint Shop" };
-      setToast(state, 'Got the Vento. Take it to Lou’s Paint Shop.', true);
-    } else if (m.phase === 'deliver' && p.inCar && p.car === vento && near(LANDMARKS.paint.x, LANDMARKS.paint.y, 110)) {
-      completeMission(state);
-    }
-  } else if (m.id === 4) {
-    const c = m.courier;
-    if (m.phase === 'chase' && c) {
-      m.target = { x: c.x, y: c.y, label: 'Courier' };
-      // The courier flees along its road, away from the player.
-      if (!c.stopped) {
-        c.x = clampToWorld(c.x + Math.cos(c.angle) * c.speed * dt);
-        c.y = clampToWorld(c.y + Math.sin(c.angle) * c.speed * dt);
-        if (c.x < 40 || c.x > WORLD.size - 40) c.angle = Math.PI - c.angle;
-        if (c.y < 40 || c.y > WORLD.size - 40) c.angle = -c.angle;
-      }
-      if (p.inCar && p.car) {
-        m.ramT -= dt;
-        if (Math.hypot(c.x - p.car.x, c.y - p.car.y) < 44 && Math.abs(p.car.speed) > 100 && m.ramT <= 0) {
-          m.ramT = 1;
-          m.rams += 1;
-          p.car.speed *= 0.5;
-          if (state.sfx) state.sfx.crash();
-          setToast(state, `Ram ${m.rams}/3 — keep hitting the courier!`, true);
-          if (m.rams >= 3) {
-            c.stopped = true;
-            c.speed = 0;
-            m.phase = 'grab';
-            setToast(state, 'Courier stopped! Grab the package on foot.', true);
-          }
+};
+
+SH.completeMission = function (S) {
+  var m = S.mission;
+  if (!m) return;
+  S.money += m.def.payout;
+  S.score += 500;
+  if (S.completed.indexOf(m.id) < 0) S.completed.push(m.id);
+  if (m.id === 7) S.storyDone = true;
+  S.message = m.def.name + ' complete! +$' + m.def.payout;
+  S.messageT = 3;
+  SH.sfx('cash');
+  S.mission = null;
+  SH.saveGame(S);
+};
+
+SH.failMission = function (S, why) {
+  S.message = why || 'Job failed.';
+  S.messageT = 3;
+  SH.sfx('fail');
+  S.mission = null;
+  S.guards = [];
+};
+
+SH.updateMission = function (S, dt) {
+  var m = S.mission;
+  if (!m) return;
+  var p = S.player;
+  m.timer -= dt;
+  if (m.timer <= 0) { SH.failMission(S, m.def.name + ' — time ran out.'); return; }
+  var plaza = SH.landmark('Cactus Court Plaza');
+  var marina = SH.landmark('Marina');
+  var hq = SH.landmark('SCPD Headquarters');
+  var neon = SH.landmark('Neon Strip');
+  var pier = SH.landmark('Pier 9');
+  var market = SH.landmark('Old Town Market');
+  switch (m.id) {
+    case 1:
+      if (m.stage === 0 && p.car) { m.stage = 1; SH.updateMissionTarget(S); }
+      else if (m.stage === 1 && SH.dist(p.x, p.y, plaza.x, plaza.y) < 60) SH.completeMission(S);
+      break;
+    case 2:
+      if (SH.dist(p.x, p.y, marina.x, marina.y) < 70) SH.completeMission(S);
+      break;
+    case 3:
+      if (m.stage === 0 && p.car === S.cars[0]) { m.stage = 1; SH.updateMissionTarget(S); }
+      else if (m.stage === 1 && SH.dist(p.x, p.y, plaza.x, plaza.y) < 60) SH.completeMission(S);
+      break;
+    case 4:
+      // The manhunt stays hot for the whole chase.
+      S.heat = Math.max(S.heat, 200);
+      if (SH.dist(p.x, p.y, neon.x, neon.y) < 80) SH.completeMission(S);
+      break;
+    case 5:
+      if (m.stage === 0 && SH.dist(p.x, p.y, hq.x, hq.y) < 70) {
+        m.stage = 1; m.channelT = 0; SH.updateMissionTarget(S);
+        S.message = 'Planting the package… stay put.';
+        S.messageT = 2;
+      } else if (m.stage === 1) {
+        if (SH.dist(p.x, p.y, hq.x, hq.y) > 80) { m.stage = 0; SH.updateMissionTarget(S); }
+        else {
+          m.channelT += dt;
+          if (m.channelT >= 3) { m.stage = 2; SH.updateMissionTarget(S); S.message = 'Package planted — get back to Old Town.'; S.messageT = 2; }
         }
+      } else if (m.stage === 2 && SH.dist(p.x, p.y, market.x, market.y) < 70) {
+        SH.completeMission(S);
       }
-    } else if (m.phase === 'grab' && c && !p.inCar && near(c.x, c.y, 34)) {
-      m.phase = 'return';
-      m.target = { x: LANDMARKS.plaza.x, y: LANDMARKS.plaza.y, label: 'Lena' };
-      setToast(state, 'Package grabbed. Bring it back to Lena.', true);
-    } else if (m.phase === 'return' && near(LANDMARKS.plaza.x, LANDMARKS.plaza.y, 90)) {
-      completeMission(state);
-    }
-  } else if (m.id === 5) {
-    if (near(LANDMARKS.pier.x, LANDMARKS.pier.y, 90)) completeMission(state);
-  } else if (m.id === 6) {
-    if (near(LANDMARKS.pier.x, LANDMARKS.pier.y, 90)) completeMission(state);
-  } else if (m.id === 7) {
-    if (m.phase === 'clear') {
-      if (state.guards.length > 0 && state.guards.every((g) => !g.alive)) {
-        m.phase = 'grab';
-        m.target = { x: LANDMARKS.hq.x, y: LANDMARKS.hq.y + 40, label: 'The Ledger' };
-        setToast(state, 'Guards down. Grab Kane’s ledger!', true);
-      }
-    } else if (m.phase === 'grab') {
-      if (near(LANDMARKS.hq.x, LANDMARKS.hq.y + 40, 34)) {
-        m.phase = 'escape';
-        m.countdown = true;
-        m.t = 90;
-        m.target = { x: LANDMARKS.marina.x, y: LANDMARKS.marina.y, label: 'Marina' };
-        state.heat = 4 * WANTED.perStar + WANTED.midBand;
-        state.stars = 4;
-        state.lastCrimeT = state.time;
-        setToast(state, 'Ledger grabbed! Escape to the Marina in 90 seconds!', true);
-      }
-    } else if (m.phase === 'escape') {
-      if (near(LANDMARKS.marina.x, LANDMARKS.marina.y, 90)) completeMission(state);
-    }
-  }
-}
-
-/** Police: spawn to match the wanted level, chase, and clear at zero stars. */
-function updatePolice(state, dt) {
-  if (state.stars === 0) {
-    if (state.police.length > 0) state.police = [];
-    if (state.roadblocks.length > 0) state.roadblocks = [];
-    return;
-  }
-  const want = Math.min(state.stars, 4);
-  state.spawnT -= dt;
-  if (state.police.length < want && state.spawnT <= 0) {
-    state.police.push(spawnPoliceCar(state.rng, state.player.x, state.player.y));
-    state.spawnT = 2;
-  }
-  const p = state.player;
-  for (const pc of state.police) {
-    updatePoliceCar(pc, p.x, p.y, dt);
-    // Ramming the player hurts.
-    if (Math.hypot(pc.x - p.x, pc.y - p.y) < 34) {
-      if (!pc.hitT || state.time - pc.hitT > 1) {
-        pc.hitT = state.time;
-        if (p.inCar && p.car) {
-          p.car.health = Math.max(0, p.car.health - 4);
-          p.car.speed *= 0.6;
-        } else {
-          p.health -= 10;
+      break;
+    case 6:
+      if (SH.dist(p.x, p.y, pier.x, pier.y) < 70) SH.completeMission(S);
+      break;
+    case 7:
+      if (m.stage === 0 && SH.dist(p.x, p.y, hq.x, hq.y) < 80) {
+        m.stage = 1;
+        SH.spawnGuards(S, hq.x, hq.y, 3);
+        SH.updateMissionTarget(S);
+        S.message = 'Clear the 3 guards!';
+        S.messageT = 2;
+      } else if (m.stage === 1) {
+        var alive = 0;
+        for (var i = 0; i < S.guards.length; i++) if (S.guards[i].alive) alive++;
+        if (alive === 0) {
+          m.stage = 2;
+          S.message = 'Guards down — grab the ledger!';
+          S.messageT = 2;
         }
-        if (state.sfx) state.sfx.crash();
-      }
-    }
-  }
-  // Roadblocks from 4 stars: one barrier across the road ahead.
-  if (state.stars >= 4) {
-    if (state.roadblocks.length === 0) {
-      const aheadX = p.x + Math.cos(p.angle) * 280;
-      const aheadY = p.y + Math.sin(p.angle) * 280;
-      const rx = roadAt(nearestRoadIndex(aheadX));
-      const ry = roadAt(nearestRoadIndex(aheadY));
-      const onHorizontal = Math.abs(p.y - ry) < Math.abs(p.x - rx);
-      state.roadblocks.push({
-        x: onHorizontal ? clampToWorld(aheadX) : rx,
-        y: onHorizontal ? ry : clampToWorld(aheadY),
-        angle: onHorizontal ? Math.PI / 2 : 0,
-      });
-    }
-  } else if (state.roadblocks.length > 0) {
-    state.roadblocks = [];
-  }
-}
-
-/** One fixed update step. `input` is the input handle (or a test stub). */
-export function update(state, input, dt) {
-  state.time += dt;
-  if (state.screen !== SCREEN_PLAY) return;
-  const p = state.player;
-  tickWeapon(state.weapon, dt);
-
-  // Aim: the player faces the mouse.
-  if (input.mouse) {
-    const dx = input.mouse.worldX - p.x;
-    const dy = input.mouse.worldY - p.y;
-    if (dx * dx + dy * dy > 4) p.angle = Math.atan2(dy, dx);
-  }
-
-  // Move or drive.
-  if (p.inCar && p.car) {
-    driveCar(state, input, dt);
-  } else {
-    const mv = input.moveVector();
-    const speed = input.down('ShiftLeft') || input.down('ShiftRight') ? PLAYER.sprint : PLAYER.walk;
-    moveOnFoot(state, mv.x * speed, mv.y * speed, dt);
-  }
-
-  // Steal / exit.
-  if (input.wasPressed && input.wasPressed('KeyE')) toggleCar(state);
-
-  // Taxi fare.
-  if (input.wasPressed && input.wasPressed('KeyT') && !state.fare) {
-    const fare = startFare(state.rng, p.x, p.y);
-    if (fare) {
-      state.fare = fare;
-      let best = null;
-      let bestD = Infinity;
-      for (const ped of state.peds) {
-        const d = Math.hypot(ped.x - fare.pickup.x, ped.y - fare.pickup.y);
-        if (d < bestD) {
-          bestD = d;
-          best = ped;
+      } else if (m.stage === 2) {
+        if (SH.dist(p.x, p.y, hq.x + 40, hq.y + 40) < 46) {
+          m.stage = 3;
+          m.timer = 90;
+          S.heat = SH.gainStar(S.heat, 4);
+          S.lastCrimeT = S.time;
+          SH.updateMissionTarget(S);
+          S.message = 'Ledger grabbed! Run to the Marina — 90 seconds, 4 stars!';
+          S.messageT = 3;
         }
+      } else if (m.stage === 3) {
+        if (SH.dist(p.x, p.y, marina.x, marina.y) < 70) SH.completeMission(S);
       }
-      if (best) best.fare = true;
-      setToast(state, 'Fare waiting — drive to the green $ marker.', true);
-    }
+      break;
+    default: break;
   }
+};
 
-  // Shooting.
-  if (input.mouse && input.mouse.down) {
-    const b = fireWeapon(state.weapon, p.x + Math.cos(p.angle) * 20, p.y + Math.sin(p.angle) * 20, p.angle);
-    if (b) {
-      state.bullets.push(b);
-      addHeat(state, WANTED.shotHeat);
-      if (state.sfx) state.sfx.shoot();
-    }
-  }
-  if (input.wasPressed && input.wasPressed('KeyR')) startReload(state.weapon);
-  if (input.wasPressed && input.wasPressed('KeyF')) {
-    const hit = punch(p.x, p.y, p.angle, state.guards.filter((g) => g.alive));
-    if (hit && state.sfx) state.sfx.punch();
-  }
+// ---- wasted ------------------------------------------------------------
+SH.wasted = function (S) {
+  var p = S.player;
+  p.health = 0;
+  if (p.car) { p.car = null; }
+  S.screen = 'wasted';
+  S.heat = 0;
+  S.police = [];
+  S.roadblocks = [];
+  S.heli.active = false;
+  S.mission = null;
+  S.taxi = null;
+  S.delivery = null;
+  S.race = null;
+  SH.sfx('fail');
+};
 
-  // Bullets vs guards.
-  const killed = updateBullets(state.bullets, state.guards, dt);
-  for (const g of killed) {
-    state.money += GUARD_DROP;
-    state.score += GUARD_DROP;
-    addHeat(state, WANTED.guardHeat);
-    setToast(state, `Guard down! +$${GUARD_DROP}`, true);
-  }
-
-  // Guards shoot back.
-  updateGuards(state.guards, p.x, p.y, dt, () => {
-    p.health -= 6;
-    if (state.sfx) state.sfx.shoot();
-  });
-
-  // World life.
-  updateTraffic(state.traffic, dt);
-  updatePedestrians(state.peds, dt);
-
-  // Coins.
-  const earned = collectCoins(state.coins, p.x, p.y);
-  if (earned > 0) {
-    state.money += earned;
-    state.score += earned;
-    if (state.sfx) state.sfx.coin();
-    setToast(state, `Solmar coin! +$${earned} (${coinsGot(state.coins)}/10)`, true);
-    saveNow(state);
-  }
-
-  // Near-miss bonuses.
-  const nm = nearMissCheck(state, state.traffic);
-  if (nm > 0) {
-    state.money += nm;
-    state.score += nm;
-    state.nearMisses += 1;
-    if (state.sfx) state.sfx.whoosh();
-    setToast(state, `Near miss! +$${nm}`, true);
-  }
-
-  // Taxi fare progress.
-  if (state.fare) {
-    const res = updateFare(state.fare, p.x, p.y, p.inCar, dt);
-    if (res === 'picked') setToast(state, 'Passenger aboard — drive to the destination.', true);
-    else if (res === 'done') {
-      const pay = farePayout(state.fare);
-      state.money += pay;
-      state.score += pay;
-      state.faresDone += 1;
-      setToast(state, `Fare complete! +$${pay}`, true);
-      if (state.sfx) state.sfx.pickup();
-      state.fare = null;
-      for (const ped of state.peds) ped.fare = false;
-      saveNow(state);
-    } else if (res === 'lost') {
-      setToast(state, 'The fare gave up waiting.', false);
-      state.fare = null;
-      for (const ped of state.peds) ped.fare = false;
-    }
-  }
-
-  // Paint shop: repair + clear heat.
-  if (paintShopService(state)) {
-    setToast(state, "Lou's Paint Shop — car repaired, heat cleared!", true);
-    if (state.sfx) state.sfx.pickup();
-  }
-
-  // Ammo pickups.
-  for (const pk of state.pickups) {
-    if (!pk.taken && Math.hypot(pk.x - p.x, pk.y - p.y) < 32) {
-      pk.taken = true;
-      state.weapon.reserve += pk.amount;
-      setToast(state, `Ammo +${pk.amount}`, true);
-      if (state.sfx) state.sfx.pickup();
-    }
-  }
-
-  // Wanted decay: lay low and the heat fades.
-  if (state.time - state.lastCrimeT > WANTED.calmSeconds && state.heat > 0) {
-    state.heat = Math.max(0, state.heat - WANTED.decayPerSec * dt);
-    state.stars = starsForHeat(state.heat);
-  }
-
-  updatePolice(state, dt);
-  updateMission(state, dt);
-
-  // WASTED.
-  if (p.health <= 0) {
-    p.health = 0;
-    const lost = Math.min(state.money, 100);
-    state.money -= lost;
-    state.screen = SCREEN_WASTED;
-    if (state.sfx) state.sfx.wasted();
-  }
-
-  // Autosave.
-  state.saveT += dt;
-  if (state.saveT > 10) {
-    state.saveT = 0;
-    saveNow(state);
-  }
-}
-
-/** Respawn after WASTED: hospital, full health, no heat. */
-export function respawn(state) {
-  const p = state.player;
-  p.x = LANDMARKS.hospital.x;
-  p.y = LANDMARKS.hospital.y + 90;
-  p.health = PLAYER.health;
-  p.inCar = false;
+SH.respawn = function (S) {
+  var p = S.player;
+  var h = SH.hospitalSpot();
+  p.x = h.x; p.y = h.y;
+  p.health = 100;
+  p.speed = 0;
   p.car = null;
-  state.heat = 0;
-  state.stars = 0;
-  state.police = [];
-  state.roadblocks = [];
-  state.screen = SCREEN_PLAY;
-}
+  S.money = Math.max(0, S.money - 100);
+  S.screen = 'play';
+  S.message = 'Patched up at Sunset Hospital. -$100.';
+  S.messageT = 3;
+  SH.saveGame(S);
+};
 
-/** Boot the game in the browser: canvas, input, loop, screens. */
-export function boot() {
-  const params = new URLSearchParams(window.location.search);
-  const shot = params.get('shot');
-  const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-  const seed = Number.isInteger(seedParam) ? seedParam : (Math.floor(Math.random() * 4294967296) >>> 0);
-
-  const canvas = document.getElementById('game');
-  const status = document.getElementById('status');
-  const state = createGame(seed);
-  state.sfx = createSound();
-  const saved = loadSave();
-  if (saved) applySave(state, saved);
-
-  const input = createInput(canvas);
-  const renderer = createRenderer(canvas);
-
-  // Mouse position in world coords, for aiming.
-  function refreshMouseWorld() {
-    const rect = canvas.getBoundingClientRect();
-    const cam = renderer.cameraFor(state);
-    const sx = VIEW.width / Math.max(1, rect.width);
-    const sy = VIEW.height / Math.max(1, rect.height);
-    input.mouse.worldX = cam.x + input.mouse.x * sx;
-    input.mouse.worldY = cam.y + input.mouse.y * sy;
+// ---- player ------------------------------------------------------------
+SH.nearestCar = function (S, maxD) {
+  var p = S.player, best = null, bd = maxD;
+  for (var i = 0; i < S.cars.length; i++) {
+    var c = S.cars[i];
+    var d = SH.dist(p.x, p.y, c.x, c.y);
+    if (d < bd) { bd = d; best = c; }
   }
+  return best;
+};
 
-  function announce(text) {
-    if (status) status.textContent = text;
+// E: race flag first, then the delivery parcel, then steal / exit.
+SH.pressE = function (S) {
+  var p = S.player;
+  if (SH.tryRace(S)) return;
+  if (SH.tryDelivery(S)) return;
+  if (p.car) {
+    var c = p.car;
+    p.car = null;
+    p.x = c.x + Math.cos(p.angle + Math.PI / 2) * 26;
+    p.y = c.y + Math.sin(p.angle + Math.PI / 2) * 26;
+    p.speed = 0;
+    return;
   }
+  var car = SH.nearestCar(S, 56);
+  if (!car) return;
+  if (car.totaled) {
+    S.message = 'That car is wrecked — it will never drive again.';
+    S.messageT = 2;
+    return;
+  }
+  p.car = car;
+  p.x = car.x; p.y = car.y; p.angle = car.angle;
+  S.carsStolen++;
+  S.score += 25;
+  SH.addHeat(S, 25);
+  S.message = 'Stole the ' + car.modelName + '!';
+  S.messageT = 2;
+  SH.sfx('cash');
+  SH.saveGame(S);
+};
 
-  input.setActionHandler((action) => {
-    if (action === 'mute') {
-      state.muted = !state.muted;
-      if (state.sfx) state.sfx.muted = state.muted;
-      return;
+SH.updatePlayer = function (S, dt) {
+  var p = S.player;
+  if (p.punchT > 0) p.punchT -= dt;
+  if (S.reloadT > 0) {
+    S.reloadT -= dt;
+    if (S.reloadT <= 0) SH.finishReload(S);
+  }
+  // Aim follows the mouse.
+  var cam = SH.camera(S);
+  p.aim = SH.angleTo(p.x, p.y, cam.x + SH.mouse.x, cam.y + SH.mouse.y);
+  if (p.car) {
+    var car = p.car;
+    var top = car.top;
+    var fwd = SH.down('KeyW', 'ArrowUp');
+    var back = SH.down('KeyS', 'ArrowDown');
+    var left = SH.down('KeyA', 'ArrowLeft');
+    var right = SH.down('KeyD', 'ArrowRight');
+    var brake = SH.down('Space');
+    if (fwd) p.speed += car.accel * dt;
+    if (back) p.speed -= car.accel * 0.8 * dt;
+    if (!fwd && !back) {
+      if (p.speed > 0) p.speed = Math.max(0, p.speed - 60 * dt);
+      else p.speed = Math.min(0, p.speed + 60 * dt);
     }
-    if (action === 'pause') {
-      if (state.screen === SCREEN_PLAY) state.screen = SCREEN_PAUSED;
-      else if (state.screen === SCREEN_PAUSED) state.screen = SCREEN_PLAY;
-      else if (state.screen === SCREEN_BOARD) state.screen = SCREEN_TITLE;
-      return;
+    if (brake) {
+      if (p.speed > 0) p.speed = Math.max(0, p.speed - 420 * dt);
+      else p.speed = Math.min(0, p.speed + 420 * dt);
     }
-    if (action === 'confirm') {
-      if (state.screen === SCREEN_TITLE) {
-        state.screen = SCREEN_BOARD;
-        announce('Mission board. Choose a job.');
-      } else if (state.screen === SCREEN_WASTED) {
-        respawn(state);
-      } else if (state.screen === SCREEN_COMPLETE) {
-        state.screen = SCREEN_PLAY;
+    p.speed = SH.clamp(p.speed, -top * 0.4, top);
+    var steer = (left ? -1 : 0) + (right ? 1 : 0);
+    if (steer !== 0 && Math.abs(p.speed) > 5) {
+      p.angle += steer * 2.3 * dt * (p.speed >= 0 ? 1 : -1) * SH.clamp(Math.abs(p.speed) / 120, 0.3, 1);
+    }
+    var dx = Math.cos(p.angle) * p.speed * dt;
+    var dy = Math.sin(p.angle) * p.speed * dt;
+    var before = { x: p.x, y: p.y };
+    var res = SH.tryMove(S.world, p, dx, dy, 16);
+    car.x = p.x; car.y = p.y; car.angle = p.angle;
+    if (res.hitWall && Math.abs(p.speed) > 60) {
+      car.health -= SH.DAMAGE_PER_HIT;
+      SH.sfx('crash');
+      SH.addHeat(S, 4);
+      p.speed *= -0.25;
+      if (car.health <= 0) {
+        car.health = 0;
+        car.totaled = true;
+        p.car = null;
+        p.speed = 0;
+        S.message = 'The ' + car.modelName + ' is totaled!';
+        S.messageT = 3;
+      }
+    }
+    if (SH.dist(p.x, p.y, before.x, before.y) < 0.001 && Math.abs(p.speed) > 5 && (dx || dy)) {
+      // Stuck against a wall: bleed speed off.
+      p.speed *= 0.9;
+    }
+  } else {
+    var mx = (SH.down('KeyD', 'ArrowRight') ? 1 : 0) - (SH.down('KeyA', 'ArrowLeft') ? 1 : 0);
+    var my = (SH.down('KeyS', 'ArrowDown') ? 1 : 0) - (SH.down('KeyW', 'ArrowUp') ? 1 : 0);
+    var spd = SH.down('ShiftLeft', 'ShiftRight') ? 220 : 140;
+    if (mx !== 0 || my !== 0) {
+      var len = Math.sqrt(mx * mx + my * my);
+      var nx = (mx / len) * spd * dt, ny = (my / len) * spd * dt;
+      SH.tryMove(S.world, p, nx, ny, 12);
+      p.angle = Math.atan2(my, mx);
+    }
+    p.speed = 0;
+  }
+};
+
+// ---- frame update ------------------------------------------------------
+SH.update = function (S, dt) {
+  S.time += dt;
+  if (S.messageT > 0) S.messageT -= dt;
+  SH.updateTraffic(S.world, dt);
+  if (S.screen !== 'play') return;
+  SH.updatePlayer(S, dt);
+  SH.updateHeat(S, dt);
+  SH.updatePolice(S, dt);
+  SH.updateHeli(S, dt);
+  SH.updateBullets(S, dt);
+  SH.updateGuards(S, dt);
+  SH.checkCoins(S);
+  SH.checkAmmo(S);
+  SH.updateTaxi(S, dt);
+  SH.updateDelivery(S, dt);
+  SH.updateRace(S, dt);
+  SH.updateMission(S, dt);
+  SH.paintShopVisit(S);
+  SH.checkNearMiss(S);
+  // Keys that fire once per press.
+  if (SH.pressed('KeyE')) SH.pressE(S);
+  if (SH.pressed('KeyT')) SH.tryTaxi(S);
+  if (SH.pressed('KeyF')) SH.punch(S);
+  if (SH.pressed('KeyR')) SH.reload(S);
+  if (SH.pressed('KeyM')) SH.toggleMute();
+  if (SH.pressed('KeyB')) S.screen = 'board';
+  if (SH.mouse.clicked && !S.player.car) {
+    var cam = SH.camera(S);
+    SH.shoot(S, cam.x + SH.mouse.x, cam.y + SH.mouse.y);
+  }
+};
+
+// ---- render ------------------------------------------------------------
+SH.render = function (S, ctx) {
+  ctx.clearRect(0, 0, SH.CANVAS_W, SH.CANVAS_H);
+  if (S.screen === 'title') { SH.drawTitle(ctx, S); return; }
+  if (S.screen === 'board') { SH.drawBoard(ctx, S); return; }
+  if (S.screen === 'wasted') { SH.drawWasted(ctx, S); return; }
+  var cam = SH.camera(S);
+  SH.drawWorld(ctx, S, cam);
+  SH.drawEntities(ctx, S, cam);
+  SH.drawHUD(ctx, S);
+  SH.drawMinimap(ctx, S);
+  if (S.screen === 'pause') SH.drawPause(ctx, S);
+};
+
+// ---- boot --------------------------------------------------------------
+SH.boot = function () {
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  SH.initInput(canvas);
+  SH.initAudio();
+  var params = new URLSearchParams(window.location.search);
+  var seed = parseInt(params.get('seed') || '1', 10) || 1;
+  var S = SH.newGame(seed);
+  SH.game = S;
+  var shot = params.get('shot');
+  if (shot) SH.applyShot(S, shot);
+  // Title / board / wasted clicks.
+  canvas.addEventListener('click', function () {
+    SH.initAudio();
+    if (S.screen === 'title') { S.screen = 'board'; return; }
+    if (S.screen === 'wasted') { SH.respawn(S); return; }
+    if (S.screen === 'board') {
+      var mx = SH.mouse.x, my = SH.mouse.y;
+      for (var i = 0; i < SH.MISSIONS.length; i++) {
+        var col = i % 4, row = Math.floor(i / 4);
+        var x = 40 + col * 305, y = 130 + row * 190;
+        if (mx >= x && mx <= x + 285 && my >= y && my <= y + 170) {
+          SH.startMission(S, SH.MISSIONS[i].id);
+          S.screen = 'play';
+          return;
+        }
       }
     }
   });
-
-  // Screenshot staging: a fixed scene, painted twice, then flagged ready.
-  if (shot) {
-    stageShot(state, shot);
-    renderer.draw(state);
-    renderer.draw(state);
-    window.__shotReady = true;
-    return;
-  }
-
-  let last = performance.now();
-  let acc = 0;
-  function frame(now) {
-    const elapsed = Math.min(0.25, (now - last) / 1000);
+  window.addEventListener('keydown', function (e) {
+    if (S.screen === 'title' && (e.code === 'Enter' || e.code === 'Space')) S.screen = 'board';
+    else if (S.screen === 'wasted' && e.code === 'Enter') SH.respawn(S);
+    else if (S.screen === 'board') {
+      if (e.code === 'Escape') S.screen = 'play';
+      else if (/^Digit[1-7]$/.test(e.code)) {
+        var n = parseInt(e.code.slice(5), 10);
+        if (n >= 1 && n <= 7) { SH.startMission(S, n); S.screen = 'play'; }
+      }
+    } else if (S.screen === 'pause' && e.code === 'KeyP') S.screen = 'play';
+    else if (S.screen === 'play' && e.code === 'KeyP') S.screen = 'pause';
+  });
+  var last = performance.now();
+  var frame = function () {
+    var now = performance.now();
+    var dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
     last = now;
-    refreshMouseWorld();
-    // Board shortcuts: number keys start jobs, Esc goes back.
-    if (state.screen === SCREEN_BOARD) {
-      for (let i = 1; i <= 7; i++) {
-        if (input.wasPressed(`Digit${i}`)) {
-          if (startMission(state, i)) {
-            state.screen = SCREEN_PLAY;
-            announce(`Job ${i} started.`);
-          }
-        }
-      }
-      if (input.wasPressed('Escape')) state.screen = SCREEN_TITLE;
-      if (input.wasClicked()) {
-        const rect = canvas.getBoundingClientRect();
-        const sx = VIEW.width / Math.max(1, rect.width);
-        const sy = VIEW.height / Math.max(1, rect.height);
-        const mx = input.mouse.x * sx;
-        const my = input.mouse.y * sy;
-        // Card rects live in render.js; recompute the same layout here.
-        for (let i = 0; i < 7; i++) {
-          const col = i % 4;
-          const row = Math.floor(i / 4);
-          const rx = 60 + col * 300;
-          const ry = 170 + row * 210;
-          if (mx >= rx && mx <= rx + 280 && my >= ry && my <= ry + 190) {
-            if (startMission(state, i + 1)) {
-              state.screen = SCREEN_PLAY;
-              announce(`Job ${i + 1} started.`);
-            }
-          }
-        }
-      }
-    }
-    acc += elapsed;
-    while (acc >= STEP) {
-      update(state, input, STEP);
-      acc -= STEP;
-    }
-    renderer.draw(state);
-    input.endFrame();
+    SH.update(S, dt);
+    SH.render(S, ctx);
+    SH.endFrameInput();
     requestAnimationFrame(frame);
-  }
+  };
   requestAnimationFrame(frame);
+};
+
+if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+  SH.boot();
 }
 
-// In a browser, start the game as soon as this module loads. In Node
-// (the logic test imports this module) there is no window, so boot stays
-// off and the pure functions remain testable.
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  boot();
-}

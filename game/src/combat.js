@@ -1,178 +1,153 @@
-// Combat: shooting with real bullet travel, punching, guards with
-// health pips, and ammo pickups. Bullets are tested along their whole
-// path each step (segment vs circle), so a fast bullet cannot tunnel
-// past a thin target.
+// Solmar Heat — combat: shooting, punching, bullets and guards.
+// A bullet is tested along its whole path in small steps, so it
+// cannot tunnel past a thin target between frames.
+SH.spawnGuards = function (S, cx, cy, n) {
+  S.guards = [];
+  for (var i = 0; i < n; i++) {
+    var a = (i / n) * Math.PI * 2;
+    S.guards.push({
+      x: cx + Math.cos(a) * 70, y: cy + Math.sin(a) * 70,
+      hp: 3, maxHp: 3, shootT: 1 + i * 0.7, alive: true
+    });
+  }
+};
 
-import { COMBAT } from './config.js';
-
-/** A fresh pistol: full magazine, starting reserve. */
-export function createWeapon() {
-  return { mag: COMBAT.magSize, reserve: COMBAT.reserveStart, reloading: 0 };
-}
-
-/** Fire one shot. Returns a bullet, or null when the gun cannot fire. */
-export function fireWeapon(weapon, x, y, angle) {
-  if (weapon.reloading > 0) return null;
-  if (weapon.mag <= 0) return null;
-  weapon.mag -= 1;
-  return {
-    x,
-    y,
-    px: x,
-    py: y,
-    vx: Math.cos(angle) * COMBAT.bulletSpeed,
-    vy: Math.sin(angle) * COMBAT.bulletSpeed,
-    life: 0.9,
-  };
-}
-
-/** Start a reload; finishes in COMBAT.reloadSeconds. Returns true when started. */
-export function startReload(weapon) {
-  if (weapon.reloading > 0 || weapon.mag >= COMBAT.magSize || weapon.reserve <= 0) return false;
-  weapon.reloading = COMBAT.reloadSeconds;
+// Fire one bullet from the player toward a world point.
+SH.shoot = function (S, tx, ty) {
+  var p = S.player;
+  if (p.ammo <= 0) { SH.sfx('dry'); return false; }
+  if (S.reloadT > 0) return false;
+  p.ammo--;
+  var a = SH.angleTo(p.x, p.y, tx, ty);
+  S.bullets.push({ x: p.x, y: p.y, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620, life: 1.2, fromPlayer: true });
+  SH.sfx('shot');
+  SH.addHeat(S, 12);
   return true;
-}
+};
 
-/** Tick the reload timer; tops the magazine up when it finishes. */
-export function tickWeapon(weapon, dt) {
-  if (weapon.reloading <= 0) return;
-  weapon.reloading -= dt;
-  if (weapon.reloading <= 0) {
-    weapon.reloading = 0;
-    const need = COMBAT.magSize - weapon.mag;
-    const take = Math.min(need, weapon.reserve);
-    weapon.mag += take;
-    weapon.reserve -= take;
+// Punch: a short-range swing on foot.
+SH.punch = function (S) {
+  var p = S.player;
+  if (p.punchT > 0 || S.reloadT > 0) return;
+  p.punchT = 0.35;
+  SH.sfx('punch');
+  for (var i = 0; i < S.guards.length; i++) {
+    var g = S.guards[i];
+    if (g.alive && SH.dist(p.x, p.y, g.x, g.y) < 46) {
+      g.hp--;
+      if (g.hp <= 0) SH.killGuard(S, g);
+    }
   }
-}
+};
 
-/**
- * Segment-vs-circle test: does the segment (x1,y1)-(x2,y2) pass within
- * radius r of (cx,cy)? This is the anti-tunnelling check.
- */
-export function segmentHitsCircle(x1, y1, x2, y2, cx, cy, r) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len2 = dx * dx + dy * dy;
-  let t = 0;
-  if (len2 > 0) {
-    t = ((cx - x1) * dx + (cy - y1) * dy) / len2;
-    t = Math.max(0, Math.min(1, t));
-  }
-  const nx = x1 + dx * t;
-  const ny = y1 + dy * t;
-  const ox = cx - nx;
-  const oy = cy - ny;
-  return ox * ox + oy * oy <= r * r;
-}
+SH.killGuard = function (S, g) {
+  g.alive = false;
+  S.money += SH.GUARD_DROP;
+  S.score += 150;
+  S.message = 'Guard down! +$' + SH.GUARD_DROP;
+  S.messageT = 2;
+  SH.sfx('guardDown');
+};
 
-/**
- * Advance bullets and resolve hits against guards. `targets` are
- * {x, y, radius, health, alive} objects. Returns the list of targets
- * whose health hit zero this step.
- */
-export function updateBullets(bullets, targets, dt) {
-  const killed = [];
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
-    b.px = b.x;
-    b.py = b.y;
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
+// Step every bullet forward, testing its path in 4-unit steps so
+// nothing between frames is skipped.
+SH.updateBullets = function (S, dt) {
+  var p = S.player;
+  for (var i = S.bullets.length - 1; i >= 0; i--) {
+    var b = S.bullets[i];
     b.life -= dt;
-    let dead = b.life <= 0;
-    if (!dead) {
-      for (const t of targets) {
-        if (!t.alive) continue;
-        if (segmentHitsCircle(b.px, b.py, b.x, b.y, t.x, t.y, t.radius)) {
-          t.health -= COMBAT.bulletDamage;
-          if (t.health <= 0) {
-            t.health = 0;
-            t.alive = false;
-            killed.push(t);
-          }
-          dead = true;
+    var steps = Math.ceil(SH.dist(0, 0, b.vx * dt, b.vy * dt) / 4) || 1;
+    var hit = false;
+    for (var s = 1; s <= steps; s++) {
+      var nx = b.x + (b.vx * dt * s) / steps;
+      var ny = b.y + (b.vy * dt * s) / steps;
+      for (var g = 0; g < S.guards.length; g++) {
+        var gd = S.guards[g];
+        if (!gd.alive) continue;
+        if (SH.dist(nx, ny, gd.x, gd.y) < 16) {
+          gd.hp--;
+          if (gd.hp <= 0) SH.killGuard(S, gd);
+          hit = true;
           break;
         }
       }
+      if (hit) break;
+      // A bullet dies on a building.
+      if (SH.hitsBuilding(S.world, nx, ny, 2)) { hit = true; break; }
     }
-    if (dead) bullets.splice(i, 1);
-  }
-  return killed;
-}
-
-/** A punch: the nearest living target inside punch range takes damage. */
-export function punch(attackerX, attackerY, angle, targets) {
-  let best = null;
-  let bestD = Infinity;
-  for (const t of targets) {
-    if (!t.alive) continue;
-    const d = Math.hypot(t.x - attackerX, t.y - attackerY);
-    if (d > COMBAT.punchRange) continue;
-    const want = Math.atan2(t.y - attackerY, t.x - attackerX);
-    let diff = want - angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    if (Math.abs(diff) > 1.1) continue;
-    if (d < bestD) {
-      bestD = d;
-      best = t;
+    if (hit || b.life <= 0) { S.bullets.splice(i, 1); continue; }
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    // Enemy bullets (from guards) can hit the player.
+    if (!b.fromPlayer && SH.dist(b.x, b.y, p.x, p.y) < 14) {
+      SH.hurtPlayer(S, 10);
+      S.bullets.splice(i, 1);
     }
   }
-  if (!best) return null;
-  best.health -= COMBAT.punchDamage;
-  if (best.health <= 0) {
-    best.health = 0;
-    best.alive = false;
-  }
-  return best;
-}
+};
 
-/** Spawn the finale's guards around SCPD Headquarters. */
-export function spawnGuards(hqX, hqY) {
-  const spots = [
-    { dx: -70, dy: -40 },
-    { dx: 70, dy: -40 },
-    { dx: 0, dy: 70 },
-  ];
-  return spots.map((s, i) => ({
-    id: i,
-    x: hqX + s.dx,
-    y: hqY + s.dy,
-    radius: 16,
-    health: COMBAT.guardHealth,
-    alive: true,
-    angle: Math.PI / 2,
-    shootT: 1 + i * 0.6,
-    wander: i * 2.1,
-  }));
-}
-
-/** Guards shuffle in place and take pot-shots at the player when close. */
-export function updateGuards(guards, px, py, dt, onGuardShot) {
-  for (const g of guards) {
+// Guards stand their ground and shoot back at the player.
+SH.updateGuards = function (S, dt) {
+  var p = S.player;
+  for (var i = 0; i < S.guards.length; i++) {
+    var g = S.guards[i];
     if (!g.alive) continue;
-    g.wander += dt;
-    g.x += Math.cos(g.wander) * 6 * dt;
-    g.y += Math.sin(g.wander * 0.7) * 6 * dt;
-    const d = Math.hypot(px - g.x, py - g.y);
+    var d = SH.dist(p.x, p.y, g.x, g.y);
     if (d < 420) {
-      g.angle = Math.atan2(py - g.y, px - g.x);
       g.shootT -= dt;
       if (g.shootT <= 0) {
-        g.shootT = 1.4;
-        if (onGuardShot) onGuardShot(g);
+        g.shootT = 1.6;
+        var a = SH.angleTo(g.x, g.y, p.x, p.y);
+        S.bullets.push({ x: g.x, y: g.y, vx: Math.cos(a) * 420, vy: Math.sin(a) * 420, life: 1.4, fromPlayer: false });
+        SH.sfx('shot');
       }
     }
   }
-}
+};
 
-/** Health pips for the HUD: one pip per 25 health. */
-export function guardPips(guard) {
-  return Math.ceil(guard.health / 25);
-}
+SH.hurtPlayer = function (S, dmg) {
+  var p = S.player;
+  if (S.screen !== 'play') return;
+  p.health -= dmg;
+  SH.sfx('hurt');
+  if (p.health <= 0) SH.wasted(S);
+};
 
-/** An ammo pickup lying on the ground. */
-export function createAmmoPickup(x, y) {
-  return { x, y, amount: COMBAT.ammoPickup, taken: false };
-}
+// Reload: R tops the magazine up from the reserve.
+SH.reload = function (S) {
+  var p = S.player;
+  if (S.reloadT > 0 || p.ammo >= 12 || p.reserve <= 0) return;
+  S.reloadT = 1.1;
+  SH.sfx('reload');
+};
+
+SH.finishReload = function (S) {
+  var p = S.player;
+  var need = 12 - p.ammo;
+  var take = Math.min(need, p.reserve);
+  p.ammo += take;
+  p.reserve -= take;
+};
+
+// Ammo pickups scattered on the map.
+SH.ammoSpots = function () {
+  return [
+    { x: 628, y: 882, taken: false }, { x: 1390, y: 1644, taken: false },
+    { x: 1898, y: 2152, taken: false }, { x: 374, y: 1390, taken: false }
+  ];
+};
+
+SH.checkAmmo = function (S) {
+  var p = S.player;
+  for (var i = 0; i < S.ammo.length; i++) {
+    var a = S.ammo[i];
+    if (a.taken) continue;
+    if (SH.dist(p.x, p.y, a.x, a.y) < 30) {
+      a.taken = true;
+      p.reserve += 24;
+      S.message = 'Ammo +24';
+      S.messageT = 1.5;
+      SH.sfx('coin');
+    }
+  }
+};
