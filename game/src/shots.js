@@ -1,99 +1,109 @@
-// shots.js — staged scenes for the four screenshots and the play-test.
-// ?shot=start  → title screen
-// ?shot=board  → mission board (7 jobs + 3 races + turf panel)
-// ?shot=drive  → driving a stolen Falco through the city
-// ?shot=chase  → mission 6 in progress, 4 stars, roadblock ahead, timer running
-// ?shot=mission→ job 7 "The Last Ledger" at SCPD HQ, guards up, ammo and stars shown
-// The scene is set up once the game has booted; window.__shotReady flips true
-// after the first frame of the staged scene has rendered.
+// Solmar Heat — shots.js
+// One job: deterministic scene setups for the maker's screenshots.
+// A ?shot=start|drive|chase|mission URL parameter asks main.js to pose
+// the game in that scene. Nothing here plays the game; it only arranges
+// the state so a screenshot shows the systems that matter.
 
-function shotParam() {
-  if (typeof window === 'undefined' || !window.location) return null;
+import { missionById } from './missions.js';
+import { heatBandMid } from './world.js';
+import { createGuard } from './combat.js';
+
+export const SHOT_NAMES = ['start', 'drive', 'chase', 'mission'];
+
+export function shotFromUrl() {
   try {
-    return new URLSearchParams(window.location.search).get('shot');
-  } catch (e) { return null; }
-}
-
-function putPlayerInCar(modelIndex, x, y, angle, speed) {
-  const car = G.cars[modelIndex];
-  if (!car) return;
-  car.x = x; car.y = y; car.angle = angle;
-  G.player.x = x; G.player.y = y; G.player.angle = angle;
-  G.player.onFoot = false;
-  G.player.carId = car.id;
-  G.player.speed = speed || 120;
-  G.carsStolen = Math.max(G.carsStolen, 1);
-}
-
-function setupShot(name) {
-  if (!name) return;
-  if (name === 'start' || name === 'board') {
-    G.screen = name === 'board' ? 'board' : 'title';
-    return;
-  }
-  G.screen = 'play';
-  if (name === 'drive') {
-    putPlayerInCar(0, 826, 1091, 0, 330); // Falco, mid-city heading east at speed
-    G.clockHours = 10;
-    G.weather = 'clear';
-    G.money = 1250;
-    G.score = 900;
-    spawnFare();
-    return;
-  }
-  if (name === 'chase') {
-    putPlayerInCar(0, 1091, 1200, 0, 330);
-    G.clockHours = 18; // dusk, rush hour — heavy traffic
-    G.weather = 'rain';
-    G.money = 2400;
-    G.score = 2600;
-    startMission(5); // Pier 9 Getaway
-    G.heat = 4 * CFG.heatPerStar + 10; // 4 stars, mid-band → roadblock spawns
-    G.lastCrimeAt = G.time;
-    G.roadblocks = [];
-    updateRoadblocks();
-    return;
-  }
-  if (name === 'mission') {
-    G.player.x = LANDMARKS.hq.x - 40;
-    G.player.y = LANDMARKS.hq.y + 160;
-    G.player.angle = -Math.PI / 2;
-    G.player.onFoot = true;
-    G.clockHours = 21; // night, streetlights on
-    G.weather = 'clear';
-    G.money = 3800;
-    G.score = 5200;
-    G.ammo = 12;
-    G.ammoReserve = 48;
-    startMission(6); // The Last Ledger
-    G.heat = 4 * CFG.heatPerStar + 10; // 4-star manhunt
-    G.lastCrimeAt = G.time;
-    return;
+    const params = new URLSearchParams(window.location.search);
+    const shot = params.get('shot');
+    return SHOT_NAMES.includes(shot) ? shot : null;
+  } catch (e) {
+    return null;
   }
 }
 
-// Run once, shortly after boot, so the first frames paint the staged scene.
-function armShotSetup() {
-  const name = shotParam();
-  if (!name) return;
-  let tries = 0;
-  const tick = () => {
-    tries++;
-    if (typeof G !== 'undefined' && G.cars && G.cars.length > 0) {
-      setupShot(name);
-      if (typeof window !== 'undefined') {
-        window.__shotReady = true;
-        window.__shotName = name;
-      }
-    } else if (tries < 200) {
-      setTimeout(tick, 25);
+// Pose the game for a screenshot. Called once after the world is built,
+// before the first frame is drawn.
+export function applyShot(state, shot) {
+  if (!state || !shot) return;
+  if (shot === 'start') {
+    state.mode = 'title';
+    return;
+  }
+  if (shot === 'drive') {
+    state.mode = 'play';
+    // Put the player behind the wheel of a Falco on a Sunset Mile road,
+    // mid-morning, with a couple of traffic cars alongside.
+    const car = state.playerCar || null;
+    if (car) {
+      state.player.x = 568;
+      state.player.y = 568;
+      state.player.inCar = true;
+      state.player.car = car;
+      car.x = 568;
+      car.y = 568;
+      car.angle = 0;
+      car.speed = 240;
+      state.carsStolen = 1;
     }
-  };
-  setTimeout(tick, 50);
+    state.clock.hour = 10;
+    state.clock.minute = 15;
+    return;
+  }
+  if (shot === 'chase') {
+    state.mode = 'play';
+    // Five stars, police on the tail, a roadblock ahead, the helicopter
+    // overhead, and a mission timer running — several systems at once.
+    const car = state.playerCar || null;
+    if (car) {
+      state.player.x = 1096;
+      state.player.y = 1096;
+      state.player.inCar = true;
+      state.player.car = car;
+      car.x = 1096;
+      car.y = 1096;
+      car.angle = 0;
+      car.speed = 320;
+      state.carsStolen = 1;
+    }
+    state.heat = heatBandMid(5);
+    state.clock.hour = 17;
+    state.clock.minute = 42;
+    state.weather = 'clear';
+    startMissionForShot(state, 6);
+    return;
+  }
+  if (shot === 'mission') {
+    state.mode = 'play';
+    // The ledger heist at SCPD Headquarters: guards with health pips,
+    // ammo on the HUD, four stars overhead.
+    state.player.x = 1830;
+    state.player.y = 460;
+    state.player.inCar = false;
+    state.player.car = null;
+    state.heat = heatBandMid(4);
+    state.clock.hour = 21;
+    state.clock.minute = 5;
+    state.weather = 'clear';
+    startMissionForShot(state, 7);
+    return;
+  }
 }
 
-if (typeof window !== 'undefined') {
-  window.__shotReady = false;
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armShotSetup);
-  else armShotSetup();
+function startMissionForShot(state, missionId) {
+  const mission = missionById(missionId);
+  if (!mission) return;
+  state.mission = {
+    id: mission.id,
+    stage: 0,
+    timer: missionId === 7 ? mission.timer : 85,
+    escapeTimer: 0,
+    started: true,
+  };
+  if (missionId === 7) {
+    state.guards = [
+      createGuard(1880, 280, 3),
+      createGuard(1990, 300, 3),
+      createGuard(1940, 380, 3),
+    ];
+    state.ledger = { x: 1940, y: 315, taken: false };
+  }
 }

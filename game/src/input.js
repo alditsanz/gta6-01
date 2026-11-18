@@ -1,62 +1,83 @@
-// input.js — keyboard + mouse state, edge-triggered presses, and the aim point.
+// Solmar Heat — input.js
+// One job: keyboard and mouse state. The game loop reads this object;
+// nothing else in the game touches DOM events directly.
 
-const Keys = {
-  down: {},
-  pressed: {}, // edge: true only on the frame the key went down
-  mouseX: 640,
-  mouseY: 360,
-  mouseDown: false,
-  mouseClicked: false,
+export const KEY_ACTIONS = {
+  up: ['KeyW', 'ArrowUp'],
+  down: ['KeyS', 'ArrowDown'],
+  left: ['KeyA', 'ArrowLeft'],
+  right: ['KeyD', 'ArrowRight'],
+  steal: ['KeyE'],
+  punch: ['KeyF'],
+  reload: ['KeyR'],
+  handbrake: ['Space'],
+  sprint: ['ShiftLeft', 'ShiftRight'],
+  taxi: ['KeyT'],
+  delivery: ['KeyL'],
+  pause: ['KeyP'],
+  mute: ['KeyM'],
+  turf: ['KeyG'],
+  paint: ['KeyC'],
+  board: ['KeyB'],
+  confirm: ['Enter'],
 };
 
-function keyName(e) {
-  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (k === ' ') return 'space';
-  if (k === 'ArrowUp') return 'up';
-  if (k === 'ArrowDown') return 'down';
-  if (k === 'ArrowLeft') return 'left';
-  if (k === 'ArrowRight') return 'right';
-  if (k === 'Shift') return 'shift';
-  if (k === 'Escape') return 'escape';
-  return k;
-}
-
-function installInput(canvas) {
-  if (typeof window === 'undefined') return;
-  window.addEventListener('keydown', (e) => {
-    const k = keyName(e);
-    if (['up', 'down', 'left', 'right', 'space'].includes(k)) e.preventDefault();
-    if (!Keys.down[k]) Keys.pressed[k] = true;
-    Keys.down[k] = true;
-  });
-  window.addEventListener('keyup', (e) => { Keys.down[e.key.length === 1 ? e.key.toLowerCase() : keyName(e)] = false; });
-  canvas.addEventListener('mousemove', (e) => {
-    const r = canvas.getBoundingClientRect();
-    Keys.mouseX = e.clientX - r.left;
-    Keys.mouseY = e.clientY - r.top;
-  });
-  canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) { Keys.mouseDown = true; Keys.mouseClicked = true; }
-  });
-  window.addEventListener('mouseup', () => { Keys.mouseDown = false; });
-}
-
-function endFrameInput() {
-  Keys.pressed = {};
-  Keys.mouseClicked = false;
-}
-
-// Movement axes from WASD / arrows: -1..1 on each axis.
-function moveAxes() {
-  let x = 0, y = 0;
-  if (Keys.down.a || Keys.down.left) x -= 1;
-  if (Keys.down.d || Keys.down.right) x += 1;
-  if (Keys.down.w || Keys.down.up) y -= 1;
-  if (Keys.down.s || Keys.down.down) y += 1;
-  return { x, y };
-}
-
-// Aim angle from the player (screen space) toward the mouse.
-function aimAngle(screenX, screenY) {
-  return Math.atan2(Keys.mouseY - screenY, Keys.mouseX - screenX);
+export function createInput() {
+  const input = {
+    keys: new Set(),
+    pressed: new Set(),
+    mouse: { x: 0, y: 0, down: false, clicked: false },
+    // True while any of the codes for the action is held.
+    held(action) {
+      const codes = KEY_ACTIONS[action] || [];
+      for (const c of codes) if (this.keys.has(c)) return true;
+      return false;
+    },
+    // True only on the frame the key went down (cleared by endFrame).
+    hit(action) {
+      const codes = KEY_ACTIONS[action] || [];
+      for (const c of codes) if (this.pressed.has(c)) return true;
+      return false;
+    },
+    endFrame() {
+      this.pressed.clear();
+      this.mouse.clicked = false;
+    },
+    attach(canvas) {
+      window.addEventListener('keydown', (e) => {
+        if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+          e.preventDefault();
+        }
+        if (!e.repeat) this.pressed.add(e.code);
+        this.keys.add(e.code);
+      });
+      window.addEventListener('keyup', (e) => {
+        this.keys.delete(e.code);
+      });
+      window.addEventListener('blur', () => {
+        this.keys.clear();
+      });
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        this.mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+        this.mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      });
+      canvas.addEventListener('mousedown', (e) => {
+        if (e.button === 0) {
+          // Record the position here too: a click with no prior mousemove
+          // must still land on the button under the cursor.
+          const rect = canvas.getBoundingClientRect();
+          this.mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+          this.mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+          this.mouse.down = true;
+          this.mouse.clicked = true;
+        }
+      });
+      window.addEventListener('mouseup', () => {
+        this.mouse.down = false;
+      });
+      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    },
+  };
+  return input;
 }
