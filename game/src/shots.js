@@ -1,84 +1,99 @@
-// Solmar Heat — shots: staging hooks the maker uses to set up
-// screenshots and play-tests from outside the game. Nothing here
-// changes how the game plays; it only lets a script put the game
-// into a state (night, 5 stars, a mission) and read it back.
+// shots.js — staged scenes for the four screenshots and the play-test.
+// ?shot=start  → title screen
+// ?shot=board  → mission board (7 jobs + 3 races + turf panel)
+// ?shot=drive  → driving a stolen Falco through the city
+// ?shot=chase  → mission 6 in progress, 4 stars, roadblock ahead, timer running
+// ?shot=mission→ job 7 "The Last Ledger" at SCPD HQ, guards up, ammo and stars shown
+// The scene is set up once the game has booted; window.__shotReady flips true
+// after the first frame of the staged scene has rendered.
 
-const Shots = {
-  install(state) {
-    const api = {
-      state: () => GameState,
-      // Put the game on the title screen.
-      title() { GameState.screen = 'title'; },
-      // Open the mission board.
-      board() { GameState.screen = 'board'; },
-      // Start playing, optionally at a position.
-      play(x, y) {
-        GameState.screen = 'play';
-        if (x !== undefined) { GameState.player.x = x; GameState.player.y = y; }
-      },
-      // Give the player a car and put them in it.
-      giveCar(modelId) {
-        const model = CAR_MODELS.find((m) => m.id === modelId) || CAR_MODELS[0];
-        const car = Cars.spawnCar(GameState, model, GameState.player.x + 40, GameState.player.y);
-        Cars.enter(GameState, car);
-      },
-      // Set the wanted level directly (0-5).
-      wanted(n) { Police.setStars(GameState, n); },
-      // Jump the clock: minutes since midnight (e.g. 1320 = 22:00).
-      clock(minutes) { DayNight.minutes = minutes % 1440; },
-      // Force the weather: 'clear' | 'rain' | 'fog'.
-      weather(w) { DayNight.weather = w; DayNight.weatherTimer = 9999; },
-      // Start a story job by id.
-      job(id) { Missions.start(GameState, id); },
-      // Start a race by id.
-      race(id) {
-        const def = RACES.find((r) => r.id === id);
-        if (def) {
-          GameState.player.x = def.start.x;
-          GameState.player.y = def.start.y;
-          this.giveCar('falco');
-          Races.start(GameState, def);
-        }
-      },
-      // Start a turf war in the player's current district.
-      turfWar() {
-        const name = World.districtAt(GameState.player.x, GameState.player.y);
-        const c = Turf.districtCenter(name);
-        GameState.player.x = c.x;
-        GameState.player.y = c.y;
-        Turf.tryStartWar(GameState);
-      },
-      // Teleport the player (keeps them in the world).
-      teleport(x, y) {
-        GameState.player.x = clamp(x, 20, CFG.world - 20);
-        GameState.player.y = clamp(y, 20, CFG.world - 20);
-        if (GameState.car) { GameState.car.x = GameState.player.x; GameState.car.y = GameState.player.y; }
-      },
-      // Read back a small summary for assertions.
-      summary() {
-        const s = GameState;
-        return {
-          screen: s.screen,
-          money: s.money,
-          stars: s.stars,
-          district: World.districtAt(s.player.x, s.player.y),
-          x: Math.round(s.player.x), y: Math.round(s.player.y),
-          mission: s.mission ? s.mission.job.id : null,
-          missionStep: s.mission ? s.mission.step : null,
-          jobsDone: s.jobsDone.slice(),
-          coins: Collectibles.count(),
-          turf: Turf.ownedCount(),
-          weather: DayNight.weather,
-          clock: DayNight.clockText(),
-          night: DayNight.isNight(),
-          heli: Heli.active,
-          roadblocks: Police.roadblocks.length,
-          policeCars: Police.cars.length,
-          inCar: !!s.car,
-          rank: RANKS[s.rank],
-        };
-      },
-    };
-    window.__solmar = api;
-  },
-};
+function shotParam() {
+  if (typeof window === 'undefined' || !window.location) return null;
+  try {
+    return new URLSearchParams(window.location.search).get('shot');
+  } catch (e) { return null; }
+}
+
+function putPlayerInCar(modelIndex, x, y, angle, speed) {
+  const car = G.cars[modelIndex];
+  if (!car) return;
+  car.x = x; car.y = y; car.angle = angle;
+  G.player.x = x; G.player.y = y; G.player.angle = angle;
+  G.player.onFoot = false;
+  G.player.carId = car.id;
+  G.player.speed = speed || 120;
+  G.carsStolen = Math.max(G.carsStolen, 1);
+}
+
+function setupShot(name) {
+  if (!name) return;
+  if (name === 'start' || name === 'board') {
+    G.screen = name === 'board' ? 'board' : 'title';
+    return;
+  }
+  G.screen = 'play';
+  if (name === 'drive') {
+    putPlayerInCar(0, 826, 1091, 0, 330); // Falco, mid-city heading east at speed
+    G.clockHours = 10;
+    G.weather = 'clear';
+    G.money = 1250;
+    G.score = 900;
+    spawnFare();
+    return;
+  }
+  if (name === 'chase') {
+    putPlayerInCar(0, 1091, 1200, 0, 330);
+    G.clockHours = 18; // dusk, rush hour — heavy traffic
+    G.weather = 'rain';
+    G.money = 2400;
+    G.score = 2600;
+    startMission(5); // Pier 9 Getaway
+    G.heat = 4 * CFG.heatPerStar + 10; // 4 stars, mid-band → roadblock spawns
+    G.lastCrimeAt = G.time;
+    G.roadblocks = [];
+    updateRoadblocks();
+    return;
+  }
+  if (name === 'mission') {
+    G.player.x = LANDMARKS.hq.x - 40;
+    G.player.y = LANDMARKS.hq.y + 160;
+    G.player.angle = -Math.PI / 2;
+    G.player.onFoot = true;
+    G.clockHours = 21; // night, streetlights on
+    G.weather = 'clear';
+    G.money = 3800;
+    G.score = 5200;
+    G.ammo = 12;
+    G.ammoReserve = 48;
+    startMission(6); // The Last Ledger
+    G.heat = 4 * CFG.heatPerStar + 10; // 4-star manhunt
+    G.lastCrimeAt = G.time;
+    return;
+  }
+}
+
+// Run once, shortly after boot, so the first frames paint the staged scene.
+function armShotSetup() {
+  const name = shotParam();
+  if (!name) return;
+  let tries = 0;
+  const tick = () => {
+    tries++;
+    if (typeof G !== 'undefined' && G.cars && G.cars.length > 0) {
+      setupShot(name);
+      if (typeof window !== 'undefined') {
+        window.__shotReady = true;
+        window.__shotName = name;
+      }
+    } else if (tries < 200) {
+      setTimeout(tick, 25);
+    }
+  };
+  setTimeout(tick, 50);
+}
+
+if (typeof window !== 'undefined') {
+  window.__shotReady = false;
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armShotSetup);
+  else armShotSetup();
+}

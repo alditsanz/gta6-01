@@ -1,9 +1,9 @@
-// Solmar Heat — random: small deterministic RNG so the city layout
-// is the same on every run, plus plain helpers for chance and picking.
+// random.js — small seeded RNG and helpers, so world layout is stable per seed.
 
-function mulberry32(seed) {
+// Mulberry32: a tiny fast seeded generator.
+function makeRng(seed) {
   let a = seed >>> 0;
-  return function () {
+  return function next() {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
@@ -11,20 +11,16 @@ function mulberry32(seed) {
   };
 }
 
-// One shared RNG for the city layout, seeded once per page load.
-const cityRand = mulberry32(20261119);
+// One shared generator for the live game (seeded from the clock at boot).
+const rng = makeRng((Date.now() % 2147483647) | 1);
 
-function randRange(rng, lo, hi) { return lo + rng() * (hi - lo); }
-function randInt(rng, lo, hi) { return Math.floor(randRange(rng, lo, hi + 1)); }
-function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
-function chance(rng, p) { return rng() < p; }
-
+function randRange(r, lo, hi) { return lo + r() * (hi - lo); }
+function randInt(r, lo, hi) { return Math.floor(randRange(r, lo, hi + 1)); }
+function pickOne(r, arr) { return arr[Math.floor(r() * arr.length)]; }
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
-function angleTo(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1); }
 function lerp(a, b, t) { return a + (b - a) * t; }
-
-// Shortest signed turn from angle a toward angle b.
+function dist(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return Math.sqrt(dx * dx + dy * dy); }
+function angleTo(ax, ay, bx, by) { return Math.atan2(by - ay, bx - ax); }
 function angleDiff(a, b) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;
