@@ -1,66 +1,82 @@
 // Solmar Heat — input.js
-// Keyboard and mouse state, kept separate from the game logic so the
-// logic test can drive the game with a fake input object instead of a
-// real keyboard. The browser wires real events into this same shape.
+// Keyboard + mouse state. The class only touches the DOM when attach() is
+// called by main.js, so importing this module in Node is safe.
 
-export function createInput() {
-  return {
-    keys: new Set(), // currently held key codes, lower-cased
-    pressed: new Set(), // keys pressed since the last frame (edge-triggered)
-    mouseX: 0,
-    mouseY: 0,
-    mouseDown: false,
-    mouseClicked: false, // set on mousedown, cleared after the frame reads it
-  };
-}
+export class Input {
+  constructor() {
+    this.keys = new Set(); // currently held key codes (lowercase)
+    this.pressed = new Set(); // keys pressed since the last consume()
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.mouseDown = false;
+    this.clicked = false; // a mouse click since the last consume()
+    this._onKeyDown = null;
+    this._onKeyUp = null;
+    this._onMouseMove = null;
+    this._onMouseDown = null;
+    this._onMouseUp = null;
+    this._onBlur = null;
+  }
 
-// Attach real browser listeners to an input object. Safe to call only in
-// the browser; the logic test never calls it.
-export function attachInput(input, element) {
-  const target = element || (typeof window !== 'undefined' ? window : null);
-  if (!target || !target.addEventListener) return;
-  target.addEventListener('keydown', (e) => {
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (!input.keys.has(k)) input.pressed.add(k);
-    input.keys.add(k);
-    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-      e.preventDefault();
-    }
-  });
-  target.addEventListener('keyup', (e) => {
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    input.keys.delete(k);
-  });
-  target.addEventListener('blur', () => {
-    input.keys.clear();
-  });
-  target.addEventListener('mousemove', (e) => {
-    const rect = element && element.getBoundingClientRect ? element.getBoundingClientRect() : { left: 0, top: 0 };
-    input.mouseX = e.clientX - rect.left;
-    input.mouseY = e.clientY - rect.top;
-  });
-  target.addEventListener('mousedown', (e) => {
-    input.mouseDown = true;
-    input.mouseClicked = true;
-    const rect = element && element.getBoundingClientRect ? element.getBoundingClientRect() : { left: 0, top: 0 };
-    input.mouseX = e.clientX - rect.left;
-    input.mouseY = e.clientY - rect.top;
-  });
-  target.addEventListener('mouseup', () => {
-    input.mouseDown = false;
-  });
-}
+  attach(canvas) {
+    this._onKeyDown = (e) => {
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+      if (!e.repeat) this.pressed.add(k);
+      this.keys.add(k);
+    };
+    this._onKeyUp = (e) => {
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      this.keys.delete(k);
+    };
+    this._onMouseMove = (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+    };
+    this._onMouseDown = (e) => {
+      this.mouseDown = true;
+      this.clicked = true;
+      const r = canvas.getBoundingClientRect();
+      this.mouseX = e.clientX - r.left;
+      this.mouseY = e.clientY - r.top;
+    };
+    this._onMouseUp = () => { this.mouseDown = false; };
+    this._onBlur = () => { this.keys.clear(); this.mouseDown = false; };
+    window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup', this._onKeyUp);
+    window.addEventListener('blur', this._onBlur);
+    canvas.addEventListener('mousemove', this._onMouseMove);
+    canvas.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
+  }
 
-// Per-frame housekeeping: edge-triggered sets live for exactly one frame.
-export function endFrameInput(input) {
-  input.pressed.clear();
-  input.mouseClicked = false;
-}
+  /** Is any of these keys held right now? */
+  down(...names) {
+    return names.some((n) => this.keys.has(n));
+  }
 
-// Convenience readers the game logic uses.
-export function keyDown(input, ...names) {
-  return names.some((n) => input.keys.has(n));
-}
-export function keyPressed(input, ...names) {
-  return names.some((n) => input.pressed.has(n));
+  /** Was any of these keys pressed since the last consume()? */
+  wasPressed(...names) {
+    return names.some((n) => this.pressed.has(n));
+  }
+
+  /** Was the mouse clicked since the last consume()? */
+  wasClicked() {
+    return this.clicked;
+  }
+
+  /** Clear the edge-triggered state (call once per frame, after handling). */
+  consume() {
+    this.pressed.clear();
+    this.clicked = false;
+  }
+
+  detach() {
+    if (!this._onKeyDown) return;
+    window.removeEventListener('keydown', this._onKeyDown);
+    window.removeEventListener('keyup', this._onKeyUp);
+    window.removeEventListener('blur', this._onBlur);
+    window.removeEventListener('mouseup', this._onMouseUp);
+  }
 }

@@ -3,30 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Heat — an open-world crime story</title>
+<title>Solmar Heat — An Open-World Crime Story</title>
 <link rel="icon" href="data:,">
 <style>
   html, body {
     margin: 0;
     padding: 0;
-    background: #141824;
+    background: #0b1020;
     height: 100%;
     overflow: hidden;
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   #wrap {
     display: flex;
     align-items: center;
     justify-content: center;
     height: 100vh;
+    width: 100vw;
   }
   canvas {
-    width: 1280px;
-    height: 720px;
-    max-width: 100vw;
-    max-height: 100vh;
-    background: #d9c08a;
-    box-shadow: 0 0 60px rgba(0, 0, 0, 0.6);
+    display: block;
+    width: min(100vw, calc(100vh * 16 / 9));
+    height: min(100vh, calc(100vw * 9 / 16));
+    background: #0b1020;
     cursor: crosshair;
   }
 </style>
@@ -35,10 +34,6 @@
 <div id="wrap">
   <canvas id="game" width="1280" height="720"></canvas>
 </div>
-<script type="module">
-  import { boot } from './src/main.js';
-  const canvas = document.getElementById('game');
-  boot(canvas);
-</script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>

@@ -1,38 +1,40 @@
-// Solmar Heat — main.ts (the entry program, Node 22, stdlib only)
-// Hands the game in: copies game/ and screenshots/ from beside this file
-// into the output directory and writes /output/dossier.json with the
-// kit's buildDossier. Running it twice writes byte-identical bytes.
-//
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// Solmar Heat — main.ts (the entrypoint, round 10)
+// Copies game/ and screenshots/ from this repository into the output
+// directory and writes /output/dossier.json with buildDossier from
+// vendor/makefun-game.ts. Node 22, standard library only. Running it twice
+// writes byte-identical bytes.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const repoRoot = fileURLToPath(new URL('.', import.meta.url));
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const outDir = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+const rootDir = new URL('.', import.meta.url).pathname;
 
-// The scorer's caps, from the kit's gate.json: only text_max_bytes shapes
-// the dossier's bytes; the rest make this program fail exactly where the
-// scorer would refuse the entry, instead of handing in something invalid.
-const dossierCaps = {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
-  game_max_files: 993,
-  game_max_bytes: 50331648,
-  game_path_max_bytes: 1000,
-};
+function main(): void {
+  // Start from a clean output directory so a stale file can never leak in.
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
 
-function handIn() {
-  mkdirSync(outputDir, { recursive: true });
-  cpSync(join(repoRoot, 'game'), join(outputDir, 'game'), { recursive: true });
-  const shotsDir = join(repoRoot, 'screenshots');
-  mkdirSync(join(outputDir, 'screenshots'), { recursive: true });
-  if (existsSync(shotsDir)) {
-    cpSync(shotsDir, join(outputDir, 'screenshots'), { recursive: true });
-  }
-  writeFileSync(join(outputDir, 'dossier.json'), buildDossier(outputDir, dossierCaps));
+  const gameSrc = join(rootDir, 'game');
+  const shotsSrc = join(rootDir, 'screenshots');
+  const gameDst = join(outDir, 'game');
+  const shotsDst = join(outDir, 'screenshots');
+
+  if (!existsSync(gameSrc)) throw new Error('game/: no such directory');
+  if (!existsSync(shotsSrc)) throw new Error('screenshots/: no such directory');
+
+  cpSync(gameSrc, gameDst, { recursive: true });
+  cpSync(shotsSrc, shotsDst, { recursive: true });
+
+  const dossier = buildDossier(outDir, {
+    text_max_bytes: 163840,
+    screenshots: { max: 4, max_bytes: 262144 },
+    game_max_files: 993,
+    game_max_bytes: 50331648,
+  });
+  writeFileSync(join(outDir, 'dossier.json'), dossier);
+  console.log(`wrote ${outDir}/dossier.json (${dossier.length} bytes)`);
 }
 
-handIn();
+main();

@@ -1,42 +1,52 @@
 // Solmar Heat — landmarks.js
-// The named places of Solmar: SCPD Headquarters, Lou's Paint Shop and
-// Mod Shop, the Marina, Pier 9, the plaza, the canal locks and the
-// Sunset Mile arch. Helpers here answer "where is the nearest X?" and
-// "is the player inside the paint shop?" — the logic the paint shop,
-// the mod shop and the missions lean on.
+// The named places of Solmar and the zones around them that gameplay hooks
+// into: Lou's Paint Shop (heat + repair), Lou's Mod Shop (upgrades), the
+// hospital (respawn), and the mission destinations. Pure lookups.
 
 import { LANDMARKS } from './config.js';
 
-export const PAINT_RADIUS = 130; // service radius around Lou's Paint Shop
-export const MOD_RADIUS = 130; // service radius around Lou's Mod Shop
+export const PAINT_RADIUS = 90;
+export const MOD_RADIUS = 90;
+export const LANDMARK_RADIUS = 70;
 
-export function landmarkByKind(kind) {
-  return LANDMARKS.find((l) => l.kind === kind) || null;
+export function landmarkById(id) {
+  return LANDMARKS.find((l) => l.id === id) || null;
 }
 
-export function nearestLandmark(x, y) {
-  let best = null;
-  let bestD = Infinity;
-  for (const l of LANDMARKS) {
-    const d = Math.hypot(x - l.x, y - l.y);
-    if (d < bestD) {
-      bestD = d;
-      best = l;
-    }
-  }
-  return { landmark: best, dist: bestD };
-}
-
-// True when the player is close enough to Lou's Paint Shop for service.
+/** Is a point inside Lou's Paint Shop's service zone? */
 export function inPaintShop(x, y) {
-  const shop = landmarkByKind('paint');
-  return shop ? Math.hypot(x - shop.x, y - shop.y) <= PAINT_RADIUS : false;
+  const shop = landmarkById('paint');
+  return Math.hypot(x - shop.x, y - shop.y) <= PAINT_RADIUS;
 }
 
-// True when the player is close enough to Lou's Mod Shop to buy upgrades.
+/** Is a point inside Lou's Mod Shop's service zone? */
 export function inModShop(x, y) {
-  const shop = landmarkByKind('modshop');
-  return shop ? Math.hypot(x - shop.x, y - shop.y) <= MOD_RADIUS : false;
+  const shop = landmarkById('modshop');
+  return Math.hypot(x - shop.x, y - shop.y) <= MOD_RADIUS;
 }
 
-export { LANDMARKS };
+/** Is a point within reach of a landmark (for mission arrival checks)? */
+export function atLandmark(x, y, id) {
+  const l = landmarkById(id);
+  if (!l) return false;
+  return Math.hypot(x - l.x, y - l.y) <= LANDMARK_RADIUS;
+}
+
+/** Hospital respawn point (where WASTED sends the player). */
+export function hospitalPoint() {
+  const h = landmarkById('hospital');
+  return { x: h.x, y: h.y };
+}
+
+/**
+ * Apply the paint shop: clears all heat and repairs the car to full.
+ * Returns what changed, for the HUD message.
+ */
+export function paintShopService(state) {
+  const hadHeat = state.heat > 0;
+  const car = state.car;
+  const hadDamage = car ? car.health < car.maxHealth : false;
+  state.heat = 0;
+  if (car) car.health = car.maxHealth;
+  return { clearedHeat: hadHeat, repaired: hadDamage };
+}

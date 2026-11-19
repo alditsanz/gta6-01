@@ -4,11 +4,41 @@
 [![rank](https://make.fun/badge/gta6-01/alditsanz/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01)
 [![reward](https://make.fun/badge/gta6-01/alditsanz/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
 
-**Solmar Heat** is an original open-world crime game built for the
-[make.fun "Make GTA 6" bounty](https://make.fun/bounty/gta6-01): a
-sun-soaked modern city you explore on foot and by car, with traffic,
-pedestrians, police, missions, combat and a HUD with a minimap — all
-offline, from static files, no network requests.
+An open-world crime story — steal, drive, run, survive. A wholly original
+game built for the [Make GTA 6 bounty](https://make.fun/bounty/gta6-01).
+No part of it comes from any commercial game.
+
+## The game
+
+Solmar is a sun-soaked modern city on a 9×9 street grid: ten districts
+(Sunset Mile, Cactus Court, Neon Strip, Marina, Pier 9, Canal Row and more),
+traffic and pedestrians, 12 stealable cars, and the SCPD watching everything
+you do.
+
+- **7 story jobs** — an arc about the player, Lena Voss and the crime boss
+  Kane, ending with *The Last Ledger*: clear 3 guards, steal Kane's ledger
+  from SCPD Headquarters and escape to the Marina in 90 seconds under a
+  4-star manhunt ($4,150 total).
+- **5-star wanted system** — heat rises with crime and decays when you lay
+  low; police cars pursue on the road grid, roadblocks appear from 4 stars,
+  and an SCPD helicopter joins at 5 stars.
+- **Side work** — taxi fares (press T), package deliveries, 10 hidden Solmar
+  coins ($75 each), near-miss bonuses, 3 street races, and turf wars across
+  5 zones that pay hourly income.
+- **Lou's Paint Shop** clears heat and repairs your car; **Lou's Mod Shop**
+  (new in round 10) sells Engine, Armor and Tire upgrades in 3 levels each.
+- **A living city** — day/night cycle with streetlights, rain and fog, and
+  rush-hour traffic that doubles at peak times.
+- **Combat** — shooting with ammo and reload, punching, guards with health
+  pips; **WASTED** sends you to Solmar General Hospital.
+- **Save** — progress saves automatically (money, jobs, coins, turf, mods).
+
+## Controls
+
+WASD / arrows — move & drive · E — steal / exit car · Mouse — aim & shoot ·
+R — reload · F — punch · Space — handbrake · Shift — sprint · T — taxi fare ·
+Q — start a race at a flag · G — challenge turf · P — pause · M — mute ·
+Enter — mission board.
 
 ## Play
 
@@ -17,44 +47,19 @@ node serve.ts
 # open http://localhost:8080
 ```
 
-WASD / arrows — move & drive · E — steal / exit car · Mouse — aim & shoot ·
-R — reload · F — punch · Space — handbrake · T — taxi fare · Shift — sprint ·
-P — pause · M — mute · C — turf war · V — delivery · G — repaint at Lou's ·
-1 / 2 / 3 — buy Engine / Armor / Tires at Lou's Mod Shop
+Everything runs offline from static files under `game/` — no network
+requests, no assets to download, sound synthesised live with WebAudio.
 
-## The game
+## Layout
 
-- **Solmar, a 9×9 street grid** across 10 districts — Sunset Mile, Cactus
-  Court, Neon Strip, Palm Row, Canal Row (canals with bridges), Marina,
-  Harbor Lights, Old Solmar, Pier 9 and Dune Fields — with landmarks
-  (SCPD Headquarters, Lou's Paint Shop, the Marina, Pier 9, the plaza).
-- **7 story jobs** about the driver, Lena Voss and the crime boss Kane,
-  ending in *The Last Ledger*: steal Kane's ledger from SCPD HQ, clear
-  3 guards, escape to the Marina in 90 seconds under a 4-star manhunt.
-  Finishing the story grants the rank **Solmar Legend**.
-- **A 5-star wanted system** with mid-band heat, BFS police pursuit,
-  roadblocks from 4 stars, and an SCPD helicopter at 5 stars. Lou's
-  Paint Shop clears heat and repairs your car; repaint it with G.
-- **Lou's Mod Shop (new):** spend cash on real upgrades — Engine (top
-  speed), Armor (car health), Tires (grip) — three levels each, saved
-  with your progress.
-- **Side work:** taxi fares (~$310), package deliveries, 3 street races,
-  10 hidden Solmar coins ($75 each), near-miss bonuses ($15), and turf
-  wars — hold a zone for 20 seconds to flip it to your crew and earn
-  $5/hour per zone.
-- **A living city:** day/night cycle with streetlights, clear / rain /
-  fog weather (rain cuts grip), and rush-hour traffic — twice as dense
-  at 07:00–09:00 and 17:00–19:00, half as dense late at night.
-- **Progress saves automatically** (money, missions, coins, mods, turf).
+- `game/index.html` — the page (loads `src/main.js` as a module)
+- `game/src/` — one clear job per file: `config`, `random`, `input`,
+  `world`, `weather`, `landmarks`, `collectibles`, `combat`, `sidejobs`,
+  `races`, `turf`, `modshop`, `missions`, `audio`, `render`, `shots`, `main`
+- `main.ts` — the entrypoint: copies `game/` + `screenshots/` to `/output`
+  and writes `/output/dossier.json` via `vendor/makefun-game.ts`
+- `screenshots/` — four real renders of the game itself
 
-## Entry
+## License
 
-`main.ts` (Node 22, stdlib only) copies `game/` and `screenshots/` to
-`/output` and writes `/output/dossier.json` via `vendor/makefun-game.ts`:
-
-```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-```
-
-A wholly original game. No part of it comes from any commercial game.
-MIT licensed.
+MIT — see `LICENSE`.

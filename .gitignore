@@ -1,4 +1,4 @@
-# Solmar Heat — build outputs and local clutter, kept out of the repo
+# Build outputs and local tooling — never committed.
 out/
 outA/
 outB/
@@ -6,9 +6,15 @@ dist/
 build/
 coverage/
 *.tsbuildinfo
+
+# Dependencies and logs.
 node_modules/
 *.log
+
+# OS and editor files.
 .DS_Store
 .vscode/
 .idea/
+
+# Local secrets (the game needs none, but never commit one by accident).
 .env

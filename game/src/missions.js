@@ -1,157 +1,169 @@
 // Solmar Heat — missions.js
-// The seven story jobs: the arc of the driver, Lena Voss and the crime
-// boss Kane. Each job is a small state machine — reach a target, survive
-// a timer, clear guards, grab the ledger — and the story completes only
-// when job 7, "The Last Ledger", is done. Job 6 completes the job but
-// NOT the story; only the finale grants "Solmar Legend".
+// The 7-job story arc about the player, Lena Voss and the crime boss Kane.
+// A small state machine per job: start → objectives → timer → payout.
+// Job 7 is the finale: clear 3 guards, grab Kane's ledger, escape to the
+// Marina in 90 seconds under a 4-star manhunt. Completing job 7 completes
+// the story and grants "Solmar Legend".
 
-import { MISSIONS, HEAT_PER_STAR } from './config.js';
-import { spawnHqGuards } from './combat.js';
+import { MISSIONS, JOB7_GUARD_PAY, JOB7_TOTAL } from './config.js';
+import { landmarkById } from './landmarks.js';
+import { createGuard } from './combat.js';
 
-export function missionDef(id) {
+/** Fresh mission state. */
+export function createMissions() {
+  return {
+    done: [], // ids of completed jobs
+    active: null, // {job, stage, timer, target, guards, ledgerTaken, planted, plantTimer, lena}
+    storyComplete: false,
+  };
+}
+
+/** The job definition for an id. */
+export function jobById(id) {
   return MISSIONS.find((m) => m.id === id) || null;
 }
 
-// Start a job: set the wanted stars it demands, arm its timer, and for
-// the finale spawn the three HQ guards. Returns false if it cannot start.
+/** Is a job done? */
+export function isDone(state, id) {
+  return state.done.includes(id);
+}
+
+/** The next job to play (lowest undone id), or null when all are done. */
+export function nextJob(state) {
+  return MISSIONS.find((m) => !state.done.includes(m.id)) || null;
+}
+
+/**
+ * Start a job. Returns the active mission or null (null when the job is
+ * already done or another mission is running).
+ */
 export function startMission(state, id) {
-  const def = missionDef(id);
-  if (!def) return false;
-  if (state.mission.active) return false;
-  if (state.missionsDone.includes(id)) return false;
-  state.mission = {
-    active: true,
-    id,
-    def,
-    stage: def.finale ? 'reach-hq' : 'go',
-    timer: def.timer || 0,
-    guards: def.finale ? spawnHqGuards() : [],
-    ledgerTaken: false,
-    escapeTimer: 0,
-  };
-  // A star gained lands mid-band, never exactly on a boundary: heat set
-  // to the middle of the star's band so it cannot decay a star away on
-  // the very next frame.
-  if (def.stars > 0) {
-    state.heat = def.stars * HEAT_PER_STAR + HEAT_PER_STAR / 2;
+  const job = jobById(id);
+  if (!job || state.active || state.done.includes(id)) return null;
+  const m = { job, stage: 'start', timer: job.timer, guards: [], ledgerTaken: false, planted: false, plantTimer: 10, lena: false };
+  if (id === 7) {
+    const hq = landmarkById('scpd');
+    m.guards = [createGuard(hq.x - 60, hq.y - 40), createGuard(hq.x + 40, hq.y - 60), createGuard(hq.x + 70, hq.y + 50)];
   }
-  state.message = `${def.name} — ${def.brief}`;
-  return true;
+  state.active = m;
+  return m;
 }
 
-// Distance check helper: is the player close to the job's target?
-function atTarget(state, radius = 70) {
-  const t = state.mission.def.target;
-  return Math.hypot(state.player.x - t.x, state.player.y - t.y) < radius;
+/** Where the mission marker points right now (world coords) or null. */
+export function missionTarget(state) {
+  const m = state.active;
+  if (!m) return null;
+  const id = m.job.id;
+  const hq = landmarkById('scpd');
+  const pier = landmarkById('pier9');
+  const marina = landmarkById('marina');
+  const plaza = landmarkById('plaza');
+  switch (id) {
+    case 1: return m.stage === 'start' ? { x: 400, y: 300 } : { x: 600, y: 600 };
+    case 2: return m.stage === 'start' ? { x: 950, y: 1350 } : { x: 1800, y: 300 };
+    case 3: return m.stage === 'start' ? { x: plaza.x, y: plaza.y } : { x: marina.x, y: marina.y };
+    case 4: return { x: pier.x, y: pier.y };
+    case 5: return m.stage === 'start' ? { x: hq.x, y: hq.y } : { x: 400, y: 1400 };
+    case 6: return { x: pier.x, y: pier.y };
+    case 7:
+      if (m.stage === 'escape') return { x: marina.x, y: marina.y };
+      return { x: hq.x, y: hq.y };
+    default: return null;
+  }
 }
 
-// Tick the active job. Returns the payout earned this frame (0 normally,
-// the job's payout — plus guard drops for the finale — on completion).
-export function updateMission(state, dt) {
-  const m = state.mission;
-  if (!m.active) return 0;
-  const def = m.def;
-
-  // A job timer running out fails the job (the finale's escape timer is
-  // handled in its own stage below).
-  if (m.timer > 0) {
+/**
+ * Advance the active mission by dt. `ctx` carries the live facts main.js
+ * knows: {x, y, inCar, carModel, near(x,y,r), guardsDown, ledgerAt(x,y)}.
+ * Returns events: [{type: 'stage'|'paid'|'failed'|'story-complete', ...}]
+ */
+export function tickMission(state, dt, ctx) {
+  const events = [];
+  const m = state.active;
+  if (!m) return events;
+  const job = m.job;
+  if (job.timer > 0) {
     m.timer -= dt;
     if (m.timer <= 0) {
-      failMission(state, 'Time ran out.');
-      return 0;
+      state.active = null;
+      events.push({ type: 'failed', job, reason: 'time' });
+      return events;
     }
   }
+  const near = (x, y, r) => Math.hypot(ctx.x - x, ctx.y - y) <= r;
 
-  // ---- Finale: The Last Ledger, four stages.
-  if (def.finale) {
-    if (m.stage === 'reach-hq') {
-      if (atTarget(state, 110)) {
-        m.stage = 'clear-guards';
-        state.message = 'Clear the 3 HQ guards, then grab the ledger!';
-      }
-      return 0;
+  const complete = (extra = 0) => {
+    state.done.push(job.id);
+    state.active = null;
+    const amount = job.payout + extra;
+    events.push({ type: 'paid', job, amount });
+    if (job.id === 7) {
+      state.storyComplete = true;
+      events.push({ type: 'story-complete', job, amount });
     }
-    if (m.stage === 'clear-guards') {
-      const alive = m.guards.filter((g) => !g.dead && g.hp > 0).length;
-      if (alive === 0) {
-        m.stage = 'grab-ledger';
-        state.message = 'Guards down — grab the ledger!';
-      }
-      return 0;
-    }
-    if (m.stage === 'grab-ledger') {
-      if (Math.hypot(state.player.x - 1143, state.player.y - 1143) < 60) {
+  };
+
+  switch (job.id) {
+    case 1:
+      if (m.stage === 'start' && ctx.inCar && ctx.carModel === 'Falco') {
+        m.stage = 'drive';
+        events.push({ type: 'stage', text: 'Falco stolen — drive to the garage marker.' });
+      } else if (m.stage === 'drive' && near(600, 600, 70)) complete();
+      break;
+    case 2:
+      if (m.stage === 'start' && near(950, 1350, 60)) {
+        m.stage = 'drive';
+        m.lena = true;
+        events.push({ type: 'stage', text: 'Lena is in — drive her to the Neon Strip!' });
+      } else if (m.stage === 'drive' && near(1800, 300, 70)) complete();
+      break;
+    case 3:
+      if (m.stage === 'start' && ctx.inCar && ctx.carModel === 'Comet' && near(1200, 400, 90)) {
+        m.stage = 'drive';
+        events.push({ type: 'stage', text: 'Comet lifted — deliver it to the Marina.' });
+      } else if (m.stage === 'drive' && near(300, 2100, 80)) complete();
+      break;
+    case 4:
+      if (near(2150, 1200, 80)) complete();
+      break;
+    case 5:
+      if (m.stage === 'start' && near(2050, 400, 70)) {
+        m.stage = 'plant';
+        m.plantTimer = 10;
+        events.push({ type: 'stage', text: 'Planting… hold still for 10 seconds!' });
+      } else if (m.stage === 'plant') {
+        m.plantTimer -= dt;
+        if (m.plantTimer <= 0) {
+          m.planted = true;
+          m.stage = 'escape';
+          events.push({ type: 'stage', text: 'Package planted — get out of there!' });
+        }
+      } else if (m.stage === 'escape' && near(400, 1400, 80)) complete();
+      break;
+    case 6:
+      if (near(2150, 1200, 80)) complete();
+      break;
+    case 7: {
+      const guardsLeft = m.guards.filter((g) => g.hp > 0).length;
+      if (m.stage === 'start' && guardsLeft === 0) {
+        m.stage = 'grab';
+        events.push({ type: 'stage', text: 'Guards down — grab the ledger!' });
+      } else if (m.stage === 'grab' && near(2050, 400, 56)) {
         m.ledgerTaken = true;
         m.stage = 'escape';
-        m.escapeTimer = 90;
-        // The 4-star manhunt starts the moment the ledger is taken.
-        state.heat = 4 * HEAT_PER_STAR + HEAT_PER_STAR / 2;
-        state.message = 'Ledger taken! Escape to the Marina in 90 seconds — 4 stars!';
+        m.timer = 90; // the 90-second escape clock starts at the grab
+        events.push({ type: 'stage', text: "Ledger taken! Escape to the Marina — 90 seconds, 4 stars!" });
+      } else if (m.stage === 'escape' && near(300, 2100, 80)) {
+        complete(3 * JOB7_GUARD_PAY);
       }
-      return 0;
+      break;
     }
-    if (m.stage === 'escape') {
-      m.escapeTimer -= dt;
-      if (m.escapeTimer <= 0) {
-        failMission(state, 'The manhunt caught up with you.');
-        return 0;
-      }
-      if (Math.hypot(state.player.x - 387, state.player.y - 2151) < 80) {
-        return completeMission(state, def.payout + 150); // $4,000 + $150 guard drops
-      }
-      return 0;
-    }
-    return 0;
+    default: break;
   }
-
-  // ---- Regular jobs: reach the target, in the right car if one is named.
-  if (m.stage === 'go') {
-    if (!atTarget(state)) return 0;
-    if (def.needCar && !state.player.inCar) {
-      state.message = 'You need a car for this job.';
-      return 0;
-    }
-    if (def.needModel) {
-      const car = state.player.car;
-      if (!car || car.model !== def.needModel) {
-        state.message = `This job needs a ${def.needModel}.`;
-        return 0;
-      }
-    }
-    return completeMission(state, def.payout);
-  }
-  return 0;
+  return events;
 }
 
-function completeMission(state, payout) {
-  const m = state.mission;
-  const def = m.def;
-  state.mission = { active: false, id: 0, def: null, stage: '', timer: 0, guards: [], ledgerTaken: false, escapeTimer: 0 };
-  state.missionsDone.push(def.id);
-  state.stats.missions = state.missionsDone.length;
-  if (def.finale) {
-    state.storyComplete = true;
-    state.message = `THE LAST LEDGER — story complete! +$${payout}. You are a Solmar Legend.`;
-  } else {
-    state.message = `${def.name} complete! +$${payout}`;
-  }
-  return payout;
-}
-
-function failMission(state, why) {
-  const def = state.mission.def;
-  state.mission = { active: false, id: 0, def: null, stage: '', timer: 0, guards: [], ledgerTaken: false, escapeTimer: 0 };
-  state.message = `${def.name} failed — ${why} Try again from the board.`;
-}
-
-// The mission board lists all seven jobs with their state.
-export function boardRows(state) {
-  return MISSIONS.map((m) => ({
-    id: m.id,
-    name: m.name,
-    brief: m.brief,
-    payout: m.payout,
-    done: state.missionsDone.includes(m.id),
-    active: state.mission.active && state.mission.id === m.id,
-  }));
+/** Guard drops for a finished job 7: 3 guards x $50 = $150 on top of $4,000. */
+export function job7Total() {
+  return JOB7_TOTAL;
 }

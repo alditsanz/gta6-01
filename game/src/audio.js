@@ -1,114 +1,86 @@
 // Solmar Heat — audio.js
-// All sound is synthesized with WebAudio — no audio files, no network.
-// A whoosh for near misses, a crack for shots, a thud for crashes, a
-// chime for coins, and a low siren wail while the police are close.
-// Everything is guarded so the game runs silently (and fine) where
-// AudioContext does not exist, and M toggles mute.
+// Synthesised sound effects via WebAudio: no audio assets, everything is
+// generated. The context is created lazily on the first user gesture, so
+// importing this module (or loading the page) never touches audio.
 
-let ctx = null;
-let muted = false;
-
-function audio() {
-  if (muted) return null;
-  if (typeof window === 'undefined' || typeof window.AudioContext === 'undefined') return null;
-  try {
-    if (!ctx) ctx = new window.AudioContext();
-    if (ctx.state === 'suspended') ctx.resume();
-    return ctx;
-  } catch {
-    return null;
+export class SoundBank {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    this.master = null;
   }
-}
 
-export function isMuted() {
-  return muted;
-}
-
-export function toggleMute() {
-  muted = !muted;
-  return muted;
-}
-
-// One short oscillator blip: frequency slides from f0 to f1 over dur.
-function blip(f0, f1, dur, type, gain) {
-  const ac = audio();
-  if (!ac) return;
-  try {
-    const o = ac.createOscillator();
-    const g = ac.createGain();
-    o.type = type || 'square';
-    o.frequency.setValueAtTime(f0, ac.currentTime);
-    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), ac.currentTime + dur);
-    g.gain.setValueAtTime(gain || 0.08, ac.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
-    o.connect(g);
-    g.connect(ac.destination);
-    o.start();
-    o.stop(ac.currentTime + dur);
-  } catch {
-    // Sound must never break the game.
+  /** Create the context (call from a user gesture). Safe to call twice. */
+  ensure() {
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      return true;
+    }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.35;
+      this.master.connect(this.ctx.destination);
+      return true;
+    } catch {
+      return false;
+    }
   }
-}
 
-// Filtered noise burst: the whoosh and the crash.
-function noise(dur, filterFreq, gain) {
-  const ac = audio();
-  if (!ac) return;
-  try {
-    const len = Math.floor(ac.sampleRate * dur);
-    const buf = ac.createBuffer(1, len, ac.sampleRate);
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.value = this.muted ? 0 : 0.35;
+    return this.muted;
+  }
+
+  _tone(freq, dur, type = 'square', slideTo = null, vol = 0.5) {
+    if (!this.ctx || this.muted) return;
+    const t0 = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo !== null) osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    osc.connect(g);
+    g.connect(this.master);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  _noise(dur, vol = 0.4, lowpass = 1200) {
+    if (!this.ctx || this.muted) return;
+    const t0 = this.ctx.currentTime;
+    const len = Math.floor(this.ctx.sampleRate * dur);
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-    const src = ac.createBufferSource();
+    const src = this.ctx.createBufferSource();
     src.buffer = buf;
-    const filter = ac.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = filterFreq;
-    const g = ac.createGain();
-    g.gain.value = gain || 0.12;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = lowpass;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
     src.connect(filter);
     filter.connect(g);
-    g.connect(ac.destination);
-    src.start();
-  } catch {
-    // Sound must never break the game.
+    g.connect(this.master);
+    src.start(t0);
   }
-}
 
-export const sfx = {
-  shot() {
-    blip(900, 120, 0.09, 'square', 0.09);
-    noise(0.06, 2400, 0.06);
-  },
-  punch() {
-    noise(0.08, 300, 0.14);
-  },
-  crash() {
-    noise(0.22, 180, 0.2);
-    blip(140, 40, 0.2, 'sawtooth', 0.1);
-  },
-  whoosh() {
-    noise(0.35, 900, 0.12);
-  },
-  coin() {
-    blip(880, 880, 0.07, 'sine', 0.1);
-    setTimeout(() => blip(1320, 1320, 0.12, 'sine', 0.1), 70);
-  },
-  pickup() {
-    blip(520, 780, 0.1, 'sine', 0.1);
-  },
-  success() {
-    blip(523, 523, 0.1, 'sine', 0.1);
-    setTimeout(() => blip(659, 659, 0.1, 'sine', 0.1), 90);
-    setTimeout(() => blip(784, 784, 0.18, 'sine', 0.12), 180);
-  },
-  fail() {
-    blip(300, 150, 0.35, 'sawtooth', 0.08);
-  },
-  siren() {
-    blip(700, 950, 0.4, 'sine', 0.04);
-  },
-  click() {
-    blip(600, 600, 0.04, 'square', 0.05);
-  },
-};
+  shot() { this._tone(880, 0.09, 'square', 220, 0.4); this._noise(0.06, 0.25, 3000); }
+  crash() { this._noise(0.25, 0.6, 900); this._tone(120, 0.2, 'sawtooth', 50, 0.4); }
+  whoosh() { this._noise(0.35, 0.35, 2400); }
+  coin() { this._tone(1320, 0.09, 'sine', null, 0.4); this._tone(1760, 0.14, 'sine', null, 0.35); }
+  cash() { this._tone(1046, 0.1, 'sine', null, 0.4); this._tone(1318, 0.1, 'sine', null, 0.4); this._tone(1568, 0.18, 'sine', null, 0.4); }
+  siren() { this._tone(700, 0.5, 'sine', 950, 0.16); }
+  punch() { this._noise(0.08, 0.5, 700); }
+  wasted() { this._tone(392, 0.5, 'sawtooth', 110, 0.4); }
+  click() { this._tone(660, 0.05, 'sine', null, 0.3); }
+  checkpoint() { this._tone(880, 0.08, 'sine', null, 0.4); this._tone(1174, 0.12, 'sine', null, 0.4); }
+  engine() { this._tone(90, 0.12, 'sawtooth', 70, 0.06); }
+}

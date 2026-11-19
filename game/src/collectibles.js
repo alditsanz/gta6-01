@@ -1,45 +1,47 @@
 // Solmar Heat — collectibles.js
-// The ten hidden Solmar coins. They sit on fixed grid cells, pay $75
-// each, show on the minimap, and persist in the autosave so a collected
-// coin never comes back.
+// The 10 hidden Solmar coins: fixed spots, $75 each, a HUD counter, minimap
+// dots, and persistence in the autosave. Pure state, no DOM.
 
-import { COIN_SPOTS, COIN_PAY } from './config.js';
+import { COIN_SPOTS, COIN_VALUE } from './config.js';
 
+/** Fresh coin state: one entry per fixed spot, none collected. */
 export function createCoins() {
-  return COIN_SPOTS.map((spot, i) => ({
-    id: i,
-    x: spot.x,
-    y: spot.y,
-    taken: false,
-  }));
+  return COIN_SPOTS.map((s, i) => ({ id: i, x: s.x, y: s.y, taken: false }));
 }
 
-// How many coins the player has collected.
-export function coinsCollected(coins) {
+/** How many coins are still on the map. */
+export function coinsLeft(coins) {
+  return coins.filter((c) => !c.taken).length;
+}
+
+/** How many coins the player has collected. */
+export function coinsGot(coins) {
   return coins.filter((c) => c.taken).length;
 }
 
-// Walk over the coins; any coin within pickup range of the player is
-// collected for $75. Returns the money earned this call.
-export function collectCoins(coins, playerX, playerY) {
-  let earned = 0;
+/**
+ * Collect any coin within pickup range of (x, y). Returns the coins
+ * collected this call (0 or more) and their total value.
+ */
+export function collectCoins(coins, x, y, radius = 26) {
+  let count = 0;
   for (const c of coins) {
-    if (!c.taken && Math.hypot(playerX - c.x, playerY - c.y) < 34) {
+    if (!c.taken && Math.hypot(c.x - x, c.y - y) <= radius) {
       c.taken = true;
-      earned += COIN_PAY;
+      count++;
     }
   }
-  return earned;
+  return { count, value: count * COIN_VALUE };
 }
 
-// Save/restore helpers: the autosave stores just the taken flags.
+/** Serialise collected coin ids for the save file. */
 export function coinsSave(coins) {
-  return coins.map((c) => (c.taken ? 1 : 0));
+  return coins.filter((c) => c.taken).map((c) => c.id);
 }
 
-export function coinsLoad(coins, saved) {
-  if (!Array.isArray(saved)) return;
-  for (let i = 0; i < coins.length && i < saved.length; i++) {
-    coins[i].taken = saved[i] === 1;
-  }
+/** Restore collected coin ids from a save file. */
+export function coinsLoad(coins, ids) {
+  if (!Array.isArray(ids)) return;
+  const set = new Set(ids);
+  for (const c of coins) c.taken = set.has(c.id);
 }

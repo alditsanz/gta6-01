@@ -1,8 +1,8 @@
 // Solmar Heat — random.js
-// A tiny seeded random number generator (mulberry32) so the city layout,
-// traffic and weather are deterministic from a seed, and so the logic
-// test can replay the exact same world twice and compare byte for byte.
+// A tiny seeded RNG (mulberry32) plus the small helpers the world builders
+// use. Pure: no browser access, so the logic test imports it directly.
 
+/** Deterministic RNG from a 32-bit seed. */
 export function mulberry32(seed) {
   let a = seed >>> 0;
   return function next() {
@@ -14,27 +14,57 @@ export function mulberry32(seed) {
   };
 }
 
-// A small helper object around one generator, with the calls the game
-// actually needs. Create one per game with a fixed seed for a stable city.
-export function createRng(seed) {
-  const next = mulberry32(seed);
-  return {
-    next,
-    // float in [min, max)
-    range(min, max) {
-      return min + next() * (max - min);
-    },
-    // integer in [min, max] inclusive
-    int(min, max) {
-      return Math.floor(min + next() * (max - min + 1));
-    },
-    // one element of an array
-    pick(list) {
-      return list[Math.floor(next() * list.length)];
-    },
-    // true with probability p (0..1)
-    chance(p) {
-      return next() < p;
-    },
-  };
+/** A float in [min, max). */
+export function range(rng, min, max) {
+  return min + rng() * (max - min);
+}
+
+/** An integer in [min, max] inclusive. */
+export function intRange(rng, min, max) {
+  return Math.floor(range(rng, min, max + 1));
+}
+
+/** Pick one element of an array. */
+export function pick(rng, arr) {
+  return arr[Math.floor(rng() * arr.length)];
+}
+
+/** Shuffle a copy of an array (Fisher–Yates). */
+export function shuffled(rng, arr) {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+  return out;
+}
+
+/** Clamp a value into [min, max]. */
+export function clamp(v, min, max) {
+  return v < min ? min : v > max ? max : v;
+}
+
+/** Linear interpolation. */
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+/** Distance between two points. */
+export function dist(ax, ay, bx, by) {
+  return Math.hypot(bx - ax, by - ay);
+}
+
+/** Angle from (ax,ay) to (bx,by). */
+export function angleTo(ax, ay, bx, by) {
+  return Math.atan2(by - ay, bx - ax);
+}
+
+/** Shortest signed turn from angle a to angle b, in [-PI, PI]. */
+export function angleDiff(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }
