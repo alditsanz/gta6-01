@@ -1,133 +1,157 @@
 // Solmar Heat — missions.js
-// One job: the 7 story jobs — Lena Voss, Kane, and the ledger. Each job
-// is a list of stages with a target point, an instruction and a timer.
-// main.js walks the stages; this file only describes them.
+// The seven story jobs: the arc of the driver, Lena Voss and the crime
+// boss Kane. Each job is a small state machine — reach a target, survive
+// a timer, clear guards, grab the ledger — and the story completes only
+// when job 7, "The Last Ledger", is done. Job 6 completes the job but
+// NOT the story; only the finale grants "Solmar Legend".
 
-export const MISSIONS = [
-  {
-    id: 1,
-    title: 'First Wheels',
-    giver: 'Lena Voss',
-    banner: 'Steal a Falco and bring it to the Sunset Mile marker.',
-    payout: 250,
-    timer: 180,
-    stages: [
-      { kind: 'steal', label: 'Steal a car (press E near one)', x: 320, y: 300 },
-      { kind: 'drive', label: 'Drive to the Sunset Mile marker', x: 568, y: 568 },
-    ],
-  },
-  {
-    id: 2,
-    title: "Lena's Errand",
-    giver: 'Lena Voss',
-    banner: 'Pick up Lena at Cactus Plaza, then drive her to the Marina.',
-    payout: 400,
-    timer: 150,
-    stages: [
-      { kind: 'pickup', label: 'Pick up Lena at Cactus Plaza', x: 1210, y: 400 },
-      { kind: 'drive', label: 'Drive Lena to the Marina', x: 250, y: 1090 },
-    ],
-  },
-  {
-    id: 3,
-    title: 'The Quiet Lift',
-    giver: 'Lena Voss',
-    banner: 'Steal the Vento taxi from the Neon Strip and park it at the Foundry garage.',
-    payout: 500,
-    timer: 180,
-    stages: [
-      { kind: 'steal', label: 'Steal the Vento taxi in the Neon Strip', x: 1900, y: 320 },
-      { kind: 'drive', label: 'Park it at the Foundry garage', x: 1210, y: 1010 },
-    ],
-  },
-  {
-    id: 4,
-    title: 'Harbor Chase',
-    giver: 'Kane',
-    banner: 'Tail the courier through Harbor Lights to Coral Bay. Do not lose him.',
-    payout: 700,
-    timer: 150,
-    stages: [
-      { kind: 'tail', label: 'Catch up to the courier', x: 1210, y: 1400 },
-      { kind: 'tail', label: 'Follow him to Coral Bay', x: 2152, y: 2152 },
-    ],
-  },
-  {
-    id: 5,
-    title: 'Setup at the Foundry',
-    giver: 'Kane',
-    banner: 'Plant the package at the Old Foundry, then reach Vista Heights. 2 stars from the start.',
-    payout: 900,
-    timer: 160,
-    startStars: 2,
-    stages: [
-      { kind: 'plant', label: 'Plant the package at the Old Foundry', x: 1210, y: 1010 },
-      { kind: 'drive', label: 'Reach Vista Heights', x: 1888, y: 1800 },
-    ],
-  },
-  {
-    id: 6,
-    title: 'Pier 9 Getaway — Lena Voss',
-    giver: 'Lena Voss',
-    banner: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
-    payout: 1200,
-    timer: 120,
-    startStars: 3,
-    stages: [
-      { kind: 'drive', label: 'Reach Pier 9 before the timer runs out', x: 270, y: 2240 },
-    ],
-  },
-  {
-    id: 7,
-    title: 'The Last Ledger',
-    giver: 'Lena Voss',
-    banner: "Steal Kane's ledger from SCPD Headquarters, clear 3 guards, grab the ledger, then escape to the Marina in 90 seconds under a 4-star manhunt.",
-    payout: 4000,
-    timer: 300,
-    escapeTimer: 90,
-    startStars: 0,
-    escapeStars: 4,
-    guardCount: 3,
-    guardDrop: 50,
-    stages: [
-      { kind: 'clear', label: 'Clear the 3 guards at SCPD Headquarters', x: 1940, y: 315 },
-      { kind: 'grab', label: 'Grab the ledger', x: 1940, y: 315 },
-      { kind: 'escape', label: 'Escape to the Marina in 90 seconds', x: 250, y: 1090 },
-    ],
-  },
-];
+import { MISSIONS, HEAT_PER_STAR } from './config.js';
+import { spawnHqGuards } from './combat.js';
 
-export function missionById(id) {
+export function missionDef(id) {
   return MISSIONS.find((m) => m.id === id) || null;
 }
 
-export function missionStage(mission, stageIndex) {
-  return mission.stages[stageIndex] || null;
-}
-
-export function missionStageCount(mission) {
-  return mission.stages.length;
-}
-
-// Job 7's total take: the $4,000 payout plus $50 from each of the 3 guards.
-export function jobSevenTotal() {
-  const job = missionById(7);
-  return job.payout + job.guardCount * job.guardDrop;
-}
-
-export function totalStoryPayout() {
-  return MISSIONS.reduce((sum, m) => sum + m.payout, 0);
-}
-
-// The next job the player has not finished yet, or null when the story
-// is complete. Job 6 completes the job but NOT the story; only job 7 does.
-export function nextUnfinishedMission(completedIds) {
-  for (const m of MISSIONS) {
-    if (!completedIds.includes(m.id)) return m;
+// Start a job: set the wanted stars it demands, arm its timer, and for
+// the finale spawn the three HQ guards. Returns false if it cannot start.
+export function startMission(state, id) {
+  const def = missionDef(id);
+  if (!def) return false;
+  if (state.mission.active) return false;
+  if (state.missionsDone.includes(id)) return false;
+  state.mission = {
+    active: true,
+    id,
+    def,
+    stage: def.finale ? 'reach-hq' : 'go',
+    timer: def.timer || 0,
+    guards: def.finale ? spawnHqGuards() : [],
+    ledgerTaken: false,
+    escapeTimer: 0,
+  };
+  // A star gained lands mid-band, never exactly on a boundary: heat set
+  // to the middle of the star's band so it cannot decay a star away on
+  // the very next frame.
+  if (def.stars > 0) {
+    state.heat = def.stars * HEAT_PER_STAR + HEAT_PER_STAR / 2;
   }
-  return null;
+  state.message = `${def.name} — ${def.brief}`;
+  return true;
 }
 
-export function storyComplete(completedIds) {
-  return completedIds.includes(7);
+// Distance check helper: is the player close to the job's target?
+function atTarget(state, radius = 70) {
+  const t = state.mission.def.target;
+  return Math.hypot(state.player.x - t.x, state.player.y - t.y) < radius;
+}
+
+// Tick the active job. Returns the payout earned this frame (0 normally,
+// the job's payout — plus guard drops for the finale — on completion).
+export function updateMission(state, dt) {
+  const m = state.mission;
+  if (!m.active) return 0;
+  const def = m.def;
+
+  // A job timer running out fails the job (the finale's escape timer is
+  // handled in its own stage below).
+  if (m.timer > 0) {
+    m.timer -= dt;
+    if (m.timer <= 0) {
+      failMission(state, 'Time ran out.');
+      return 0;
+    }
+  }
+
+  // ---- Finale: The Last Ledger, four stages.
+  if (def.finale) {
+    if (m.stage === 'reach-hq') {
+      if (atTarget(state, 110)) {
+        m.stage = 'clear-guards';
+        state.message = 'Clear the 3 HQ guards, then grab the ledger!';
+      }
+      return 0;
+    }
+    if (m.stage === 'clear-guards') {
+      const alive = m.guards.filter((g) => !g.dead && g.hp > 0).length;
+      if (alive === 0) {
+        m.stage = 'grab-ledger';
+        state.message = 'Guards down — grab the ledger!';
+      }
+      return 0;
+    }
+    if (m.stage === 'grab-ledger') {
+      if (Math.hypot(state.player.x - 1143, state.player.y - 1143) < 60) {
+        m.ledgerTaken = true;
+        m.stage = 'escape';
+        m.escapeTimer = 90;
+        // The 4-star manhunt starts the moment the ledger is taken.
+        state.heat = 4 * HEAT_PER_STAR + HEAT_PER_STAR / 2;
+        state.message = 'Ledger taken! Escape to the Marina in 90 seconds — 4 stars!';
+      }
+      return 0;
+    }
+    if (m.stage === 'escape') {
+      m.escapeTimer -= dt;
+      if (m.escapeTimer <= 0) {
+        failMission(state, 'The manhunt caught up with you.');
+        return 0;
+      }
+      if (Math.hypot(state.player.x - 387, state.player.y - 2151) < 80) {
+        return completeMission(state, def.payout + 150); // $4,000 + $150 guard drops
+      }
+      return 0;
+    }
+    return 0;
+  }
+
+  // ---- Regular jobs: reach the target, in the right car if one is named.
+  if (m.stage === 'go') {
+    if (!atTarget(state)) return 0;
+    if (def.needCar && !state.player.inCar) {
+      state.message = 'You need a car for this job.';
+      return 0;
+    }
+    if (def.needModel) {
+      const car = state.player.car;
+      if (!car || car.model !== def.needModel) {
+        state.message = `This job needs a ${def.needModel}.`;
+        return 0;
+      }
+    }
+    return completeMission(state, def.payout);
+  }
+  return 0;
+}
+
+function completeMission(state, payout) {
+  const m = state.mission;
+  const def = m.def;
+  state.mission = { active: false, id: 0, def: null, stage: '', timer: 0, guards: [], ledgerTaken: false, escapeTimer: 0 };
+  state.missionsDone.push(def.id);
+  state.stats.missions = state.missionsDone.length;
+  if (def.finale) {
+    state.storyComplete = true;
+    state.message = `THE LAST LEDGER — story complete! +$${payout}. You are a Solmar Legend.`;
+  } else {
+    state.message = `${def.name} complete! +$${payout}`;
+  }
+  return payout;
+}
+
+function failMission(state, why) {
+  const def = state.mission.def;
+  state.mission = { active: false, id: 0, def: null, stage: '', timer: 0, guards: [], ledgerTaken: false, escapeTimer: 0 };
+  state.message = `${def.name} failed — ${why} Try again from the board.`;
+}
+
+// The mission board lists all seven jobs with their state.
+export function boardRows(state) {
+  return MISSIONS.map((m) => ({
+    id: m.id,
+    name: m.name,
+    brief: m.brief,
+    payout: m.payout,
+    done: state.missionsDone.includes(m.id),
+    active: state.mission.active && state.mission.id === m.id,
+  }));
 }

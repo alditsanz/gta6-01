@@ -1,83 +1,66 @@
 // Solmar Heat — input.js
-// One job: keyboard and mouse state. The game loop reads this object;
-// nothing else in the game touches DOM events directly.
-
-export const KEY_ACTIONS = {
-  up: ['KeyW', 'ArrowUp'],
-  down: ['KeyS', 'ArrowDown'],
-  left: ['KeyA', 'ArrowLeft'],
-  right: ['KeyD', 'ArrowRight'],
-  steal: ['KeyE'],
-  punch: ['KeyF'],
-  reload: ['KeyR'],
-  handbrake: ['Space'],
-  sprint: ['ShiftLeft', 'ShiftRight'],
-  taxi: ['KeyT'],
-  delivery: ['KeyL'],
-  pause: ['KeyP'],
-  mute: ['KeyM'],
-  turf: ['KeyG'],
-  paint: ['KeyC'],
-  board: ['KeyB'],
-  confirm: ['Enter'],
-};
+// Keyboard and mouse state, kept separate from the game logic so the
+// logic test can drive the game with a fake input object instead of a
+// real keyboard. The browser wires real events into this same shape.
 
 export function createInput() {
-  const input = {
-    keys: new Set(),
-    pressed: new Set(),
-    mouse: { x: 0, y: 0, down: false, clicked: false },
-    // True while any of the codes for the action is held.
-    held(action) {
-      const codes = KEY_ACTIONS[action] || [];
-      for (const c of codes) if (this.keys.has(c)) return true;
-      return false;
-    },
-    // True only on the frame the key went down (cleared by endFrame).
-    hit(action) {
-      const codes = KEY_ACTIONS[action] || [];
-      for (const c of codes) if (this.pressed.has(c)) return true;
-      return false;
-    },
-    endFrame() {
-      this.pressed.clear();
-      this.mouse.clicked = false;
-    },
-    attach(canvas) {
-      window.addEventListener('keydown', (e) => {
-        if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-          e.preventDefault();
-        }
-        if (!e.repeat) this.pressed.add(e.code);
-        this.keys.add(e.code);
-      });
-      window.addEventListener('keyup', (e) => {
-        this.keys.delete(e.code);
-      });
-      window.addEventListener('blur', () => {
-        this.keys.clear();
-      });
-      canvas.addEventListener('mousemove', (e) => {
-        const rect = canvas.getBoundingClientRect();
-        this.mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
-        this.mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
-      });
-      canvas.addEventListener('mousedown', (e) => {
-        if (e.button === 0) {
-          // Record the position here too: a click with no prior mousemove
-          // must still land on the button under the cursor.
-          const rect = canvas.getBoundingClientRect();
-          this.mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
-          this.mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
-          this.mouse.down = true;
-          this.mouse.clicked = true;
-        }
-      });
-      window.addEventListener('mouseup', () => {
-        this.mouse.down = false;
-      });
-      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    },
+  return {
+    keys: new Set(), // currently held key codes, lower-cased
+    pressed: new Set(), // keys pressed since the last frame (edge-triggered)
+    mouseX: 0,
+    mouseY: 0,
+    mouseDown: false,
+    mouseClicked: false, // set on mousedown, cleared after the frame reads it
   };
-  return input;
+}
+
+// Attach real browser listeners to an input object. Safe to call only in
+// the browser; the logic test never calls it.
+export function attachInput(input, element) {
+  const target = element || (typeof window !== 'undefined' ? window : null);
+  if (!target || !target.addEventListener) return;
+  target.addEventListener('keydown', (e) => {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (!input.keys.has(k)) input.pressed.add(k);
+    input.keys.add(k);
+    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+    }
+  });
+  target.addEventListener('keyup', (e) => {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    input.keys.delete(k);
+  });
+  target.addEventListener('blur', () => {
+    input.keys.clear();
+  });
+  target.addEventListener('mousemove', (e) => {
+    const rect = element && element.getBoundingClientRect ? element.getBoundingClientRect() : { left: 0, top: 0 };
+    input.mouseX = e.clientX - rect.left;
+    input.mouseY = e.clientY - rect.top;
+  });
+  target.addEventListener('mousedown', (e) => {
+    input.mouseDown = true;
+    input.mouseClicked = true;
+    const rect = element && element.getBoundingClientRect ? element.getBoundingClientRect() : { left: 0, top: 0 };
+    input.mouseX = e.clientX - rect.left;
+    input.mouseY = e.clientY - rect.top;
+  });
+  target.addEventListener('mouseup', () => {
+    input.mouseDown = false;
+  });
+}
+
+// Per-frame housekeeping: edge-triggered sets live for exactly one frame.
+export function endFrameInput(input) {
+  input.pressed.clear();
+  input.mouseClicked = false;
+}
+
+// Convenience readers the game logic uses.
+export function keyDown(input, ...names) {
+  return names.some((n) => input.keys.has(n));
+}
+export function keyPressed(input, ...names) {
+  return names.some((n) => input.pressed.has(n));
 }

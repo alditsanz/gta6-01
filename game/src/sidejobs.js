@@ -1,180 +1,309 @@
 // Solmar Heat — sidejobs.js
-// One job: everything the player can do outside the story — taxi fares,
-// street races, package deliveries, turf wars, near-miss bonuses and the
-// paint-shop repaint. Each system is pure data + rules; main.js drives it.
+// Everything the player can do besides the story: taxi fares, package
+// deliveries, street races, near-miss bonuses, turf wars, and Lou's Mod
+// Shop upgrades (new in round 9). Each system is a small state machine
+// the main loop ticks; the functions here only touch the state object
+// they are handed.
 
-import { PRICES, ROADS } from './config.js';
-import { randPick, randRange } from './random.js';
+import {
+  FARE_PAY,
+  DELIVERY_PAY,
+  DELIVERY_TIME,
+  RACE_PAYOUTS,
+  RACES,
+  NEAR_MISS_PAY,
+  NEAR_MISS_SPEED,
+  NEAR_MISS_COOLDOWN,
+  TURF_INCOME_PER_HOUR,
+  TURF_ALL_BONUS,
+  TURF_ZONES,
+  MOD_SHOP,
+  ROADS,
+} from './config.js';
+import { spawnRival } from './combat.js';
 
-// ---------------------------------------------------------------- taxi fares
-
-export const FARE_PAY = PRICES.fareBase;
-
-export function farePayout(distanceTravelled) {
-  // A fare pays around $310, a little more for a long ride.
-  return FARE_PAY + Math.min(90, Math.floor(distanceTravelled / 40));
-}
-
-export function makeFare(rng, playerX, playerY) {
-  const pickups = [
-    { x: 304, y: 304 }, { x: 1096, y: 568 }, { x: 1888, y: 304 },
-    { x: 568, y: 1360 }, { x: 1360, y: 1096 }, { x: 2152, y: 1624 },
-    { x: 304, y: 2152 }, { x: 1624, y: 1888 },
-  ];
-  const from = randPick(rng, pickups);
-  let to = randPick(rng, pickups);
-  let guard = 0;
-  while (Math.abs(to.x - from.x) + Math.abs(to.y - from.y) < 800 && guard++ < 20) {
-    to = randPick(rng, pickups);
+// ------------------------------------------------------------------ fares
+// A fare is a pedestrian waiting at a roadside who wants a ride across
+// town. Press T near one to pick them up; drive to the marker to be paid.
+export function spawnFare(rng) {
+  const from = { x: rng.pick(ROADS), y: rng.pick(ROADS) };
+  let to = { x: rng.pick(ROADS), y: rng.pick(ROADS) };
+  while (Math.hypot(to.x - from.x, to.y - from.y) < 800) {
+    to = { x: rng.pick(ROADS), y: rng.pick(ROADS) };
   }
-  return { fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, pickedUp: false, timer: 150 };
+  return { x: from.x, y: from.y, destX: to.x, destY: to.y, active: true, pickedUp: false };
 }
 
-// ---------------------------------------------------------------- street races
-
-export const RACES = [
-  {
-    id: 'race-sunset', name: 'Sunset Sprint', district: 'Sunset Mile',
-    difficulty: 'easy', par: 75, payout: 150,
-    start: { x: 304, y: 304 },
-    checkpoints: [
-      { x: 1096, y: 304 }, { x: 1096, y: 1096 },
-      { x: 304, y: 1096 }, { x: 304, y: 568 },
-    ],
-  },
-  {
-    id: 'race-neon', name: 'Neon Rush', district: 'Neon Strip',
-    difficulty: 'medium', par: 110, payout: 300,
-    start: { x: 1888, y: 304 },
-    checkpoints: [
-      { x: 1888, y: 1096 }, { x: 1096, y: 1096 },
-      { x: 1096, y: 1888 }, { x: 1888, y: 1888 }, { x: 1888, y: 568 },
-    ],
-  },
-  {
-    id: 'race-canal', name: 'Canal Grand Prix', district: 'Canal Row',
-    difficulty: 'hard', par: 150, payout: 600,
-    start: { x: 1888, y: 1096 },
-    checkpoints: [
-      { x: 2152, y: 1096 }, { x: 2152, y: 1888 },
-      { x: 1096, y: 1888 }, { x: 1096, y: 304 },
-      { x: 304, y: 304 }, { x: 1888, y: 304 },
-    ],
-  },
-];
-
-export function raceById(id) {
-  return RACES.find((r) => r.id === id) || null;
+export function startFare(state) {
+  const f = state.fare;
+  if (!f || !f.active || f.pickedUp) return false;
+  if (Math.hypot(state.player.x - f.x, state.player.y - f.y) > 70) return false;
+  f.pickedUp = true;
+  state.message = 'Fare picked up — drive to the marker!';
+  return true;
 }
 
-export function raceNearStart(x, y) {
+// Drive the passenger to the destination. Returns the payout (0 if not done).
+export function updateFare(state) {
+  const f = state.fare;
+  if (!f || !f.pickedUp) return 0;
+  if (Math.hypot(state.player.x - f.destX, state.player.y - f.destY) < 60) {
+    f.active = false;
+    f.pickedUp = false;
+    state.stats.fares += 1;
+    state.message = `Fare complete! +$${FARE_PAY}`;
+    return FARE_PAY;
+  }
+  return 0;
+}
+
+// -------------------------------------------------------------- deliveries
+// Pick up a package, deliver it across the map before the timer ends.
+// Being spotted by police (a cop within 220 units) during a delivery
+// raises heat faster than usual.
+export function startDelivery(state) {
+  if (state.delivery.active) return false;
+  const rng = state.rng;
+  const from = { x: rng.pick(ROADS), y: rng.pick(ROADS) };
+  let to = { x: rng.pick(ROADS), y: rng.pick(ROADS) };
+  while (Math.hypot(to.x - from.x, to.y - from.y) < 900) {
+    to = { x: rng.pick(ROADS), y: rng.pick(ROADS) };
+  }
+  state.delivery = {
+    active: true,
+    pickedUp: false,
+    x: from.x,
+    y: from.y,
+    destX: to.x,
+    destY: to.y,
+    timer: DELIVERY_TIME,
+    spotted: false,
+  };
+  state.message = 'Package waiting — pick it up, then deliver it fast.';
+  return true;
+}
+
+export function updateDelivery(state, dt) {
+  const d = state.delivery;
+  if (!d.active) return 0;
+  d.timer -= dt;
+  if (d.timer <= 0) {
+    d.active = false;
+    state.message = 'Delivery failed — the package went cold.';
+    return 0;
+  }
+  // Police spotting: a cop close by while carrying the package.
+  const spotted = state.police.some((p) => Math.hypot(p.x - state.player.x, p.y - state.player.y) < 220);
+  if (spotted && d.pickedUp) d.spotted = true;
+  if (!d.pickedUp && Math.hypot(state.player.x - d.x, state.player.y - d.y) < 50) {
+    d.pickedUp = true;
+    state.message = 'Package picked up — deliver it before the timer ends!';
+  } else if (d.pickedUp && Math.hypot(state.player.x - d.destX, state.player.y - d.destY) < 60) {
+    d.active = false;
+    state.stats.deliveries = (state.stats.deliveries || 0) + 1;
+    state.message = `Delivery complete! +$${DELIVERY_PAY}`;
+    return DELIVERY_PAY;
+  }
+  return 0;
+}
+
+// ------------------------------------------------------------------ races
+// Three race routes (easy / medium / hard). A checkered flag marker
+// starts one; checkpoints light up in order; finishing all of them
+// before the par time pays cash scaled by difficulty.
+export function raceAt(x, y) {
+  // Race starters sit at the first checkpoint of each route.
   for (const r of RACES) {
-    const dx = r.start.x - x;
-    const dy = r.start.y - y;
-    if (dx * dx + dy * dy <= 70 * 70) return r;
+    const c = r.checkpoints[0];
+    if (Math.hypot(x - c.x, y - c.y) < 70) return r;
   }
   return null;
 }
 
-export function raceCheckpointReached(race, index, x, y) {
-  const cp = race.checkpoints[index];
-  if (!cp) return false;
-  const dx = cp.x - x;
-  const dy = cp.y - y;
-  return dx * dx + dy * dy <= 60 * 60;
-}
-
-// ---------------------------------------------------------------- deliveries
-
-export function makeDelivery(rng) {
-  return {
-    pickup: { x: 1096, y: 1360 },
-    dropoff: { x: 2152, y: 2152 },
-    pickedUp: false,
-    timer: 120,
-    payout: 350,
+export function startRace(state, race) {
+  if (state.race.active) return false;
+  state.race = {
+    active: true,
+    def: race,
+    index: 0,
+    timer: race.par,
+    done: false,
   };
+  state.message = `${race.name} — hit every checkpoint before the clock runs out!`;
+  return true;
 }
 
-// Being spotted by police mid-delivery raises heat faster than usual.
-export function deliveryHeatGain(base) {
-  return base * 2;
+// Returns the payout (0 while racing, or the prize on finish).
+export function updateRace(state, dt) {
+  const r = state.race;
+  if (!r.active) return 0;
+  r.timer -= dt;
+  if (r.timer <= 0) {
+    r.active = false;
+    state.message = 'Race failed — out of time. Try again at the flag.';
+    return 0;
+  }
+  const cp = r.def.checkpoints[r.index];
+  if (cp && Math.hypot(state.player.x - cp.x, state.player.y - cp.y) < 70) {
+    r.index += 1;
+    if (r.index >= r.def.checkpoints.length) {
+      r.active = false;
+      r.done = true;
+      const pay = RACE_PAYOUTS[r.def.id] || 150;
+      state.stats.races = (state.stats.races || 0) + 1;
+      state.message = `${r.def.name} won! +$${pay}`;
+      return pay;
+    }
+    state.message = `Checkpoint ${r.index + 1}/${r.def.checkpoints.length}`;
+  }
+  return 0;
 }
 
-// ---------------------------------------------------------------- turf wars
+// -------------------------------------------------------------- near miss
+// Threading past a traffic car at speed over 150 pays $15, with a
+// 1.5-second cooldown so one pass cannot pay twice.
+export function checkNearMiss(state, traffic) {
+  if (!state.player.inCar || state.player.speed < NEAR_MISS_SPEED) return 0;
+  if (state.time - state.lastNearMiss < NEAR_MISS_COOLDOWN) return 0;
+  for (const t of traffic) {
+    const d = Math.hypot(t.x - state.player.x, t.y - state.player.y);
+    if (d > 26 && d < 60) {
+      state.lastNearMiss = state.time;
+      state.stats.nearMisses += 1;
+      state.message = `Near miss! +$${NEAR_MISS_PAY}`;
+      return NEAR_MISS_PAY;
+    }
+  }
+  return 0;
+}
 
-export const TURF_ZONES = [
-  { name: 'Sunset Mile',   x0: 0,    y0: 0,    x1: 813,  y1: 813,  owner: 'Vipers' },
-  { name: 'Neon Strip',    x0: 1626, y0: 0,    x1: 2440, y1: 813,  owner: 'Crows' },
-  { name: 'Canal Row',     x0: 1626, y0: 813,  x1: 2440, y1: 1626, owner: 'Kings' },
-  { name: 'Old Foundry',   x0: 813,  y0: 813,  x1: 1626, y1: 1220, owner: 'Vipers' },
-  { name: 'Harbor Lights', x0: 813,  y0: 1220, x1: 1626, y1: 1626, owner: 'Crows' },
-];
-
-export const PLAYER_CREW = 'Solmar Heat';
-export const TURF_CHALLENGE_SECONDS = 30;
-export const TURF_RIVALS_PER_CHALLENGE = 4;
-
+// -------------------------------------------------------------- turf wars
+// Challenge a rival zone: stand inside it and hold the ground while
+// rival crew members spawn and attack. Survive the timer and the zone
+// flips to the player's crew. Each held zone pays $5 per game hour.
 export function turfZoneAt(x, y) {
   for (const z of TURF_ZONES) {
-    if (x >= z.x0 && x < z.x1 && y >= z.y0 && y < z.y1) return z;
+    if (x >= z.rect.x && x <= z.rect.x + z.rect.w && y >= z.rect.y && y <= z.rect.y + z.rect.h) {
+      return z;
+    }
   }
   return null;
 }
 
-export function turfHeldCount(owners) {
-  let n = 0;
-  for (const z of TURF_ZONES) if (owners[z.name] === PLAYER_CREW) n++;
-  return n;
+export function startTurfChallenge(state, zone) {
+  if (state.turf.active) return false;
+  if (zone.owner === 'player') return false;
+  state.turf = {
+    active: true,
+    zone,
+    timer: 20,
+    rivals: [],
+    spawnTimer: 0,
+    fled: false,
+  };
+  state.message = `Turf war in ${zone.name}! Hold the ground for 20 seconds.`;
+  return true;
 }
 
-export function turfIncomePerHour(owners) {
-  return turfHeldCount(owners) * PRICES.turfIncomePerHour;
+export function updateTurf(state, dt) {
+  const t = state.turf;
+  if (!t.active) return 0;
+  // Fleeing the zone forfeits the challenge.
+  const z = t.zone;
+  const inside =
+    state.player.x >= z.rect.x &&
+    state.player.x <= z.rect.x + z.rect.w &&
+    state.player.y >= z.rect.y &&
+    state.player.y <= z.rect.y + z.rect.h;
+  if (!inside) {
+    t.active = false;
+    state.message = 'You left the turf — the challenge is off.';
+    return 0;
+  }
+  t.timer -= dt;
+  t.spawnTimer -= dt;
+  if (t.spawnTimer <= 0 && t.rivals.filter((r) => !r.dead).length < 3) {
+    t.spawnTimer = 2.5;
+    const ang = state.rng.range(0, Math.PI * 2);
+    t.rivals.push(
+      spawnRival(
+        state.player.x + Math.cos(ang) * 220,
+        state.player.y + Math.sin(ang) * 220,
+      ),
+    );
+  }
+  // Rivals shamble toward the player.
+  for (const r of t.rivals) {
+    if (r.dead) continue;
+    const d = Math.hypot(state.player.x - r.x, state.player.y - r.y);
+    if (d > 24) {
+      r.x += ((state.player.x - r.x) / d) * 55 * dt;
+      r.y += ((state.player.y - r.y) / d) * 55 * dt;
+    } else if (state.time - (state.lastRivalHit || 0) > 1) {
+      // A rival in reach hurts the player once a second.
+      state.lastRivalHit = state.time;
+      state.player.health -= 8;
+    }
+  }
+  if (t.timer <= 0) {
+    t.active = false;
+    z.owner = 'player';
+    state.stats.turfHeld = TURF_ZONES.filter((zz) => zz.owner === 'player').length;
+    let bonus = 0;
+    if (state.stats.turfHeld === TURF_ZONES.length && !state.turfAllBonusPaid) {
+      state.turfAllBonusPaid = true;
+      bonus = TURF_ALL_BONUS;
+    }
+    state.message =
+      bonus > 0
+        ? `${z.name} is yours — ALL TURF HELD! +$${TURF_ALL_BONUS} bonus`
+        : `${z.name} is yours now. Turf income: $${state.stats.turfHeld * TURF_INCOME_PER_HOUR}/hour.`;
+    return bonus;
+  }
+  return 0;
 }
 
-export function allTurfHeld(owners) {
-  return turfHeldCount(owners) === TURF_ZONES.length;
+// Hourly turf income, called when the game clock crosses an hour.
+export function turfHourlyIncome() {
+  return TURF_ZONES.filter((z) => z.owner === 'player').length * TURF_INCOME_PER_HOUR;
 }
 
-export function defaultTurfOwners() {
-  const out = {};
-  for (const z of TURF_ZONES) out[z.name] = z.owner;
-  return out;
+// ------------------------------------------------------- Lou's Mod Shop
+// NEW in round 9: spend cash on real car upgrades at Lou's Mod Shop.
+// Engine raises top speed, Armor raises car health, Tires raise grip
+// (less slide, better handling in the rain). Three levels each, costs
+// rising, saved with the rest of the progress.
+export function modLevel(state, kind) {
+  return state.mods[kind] || 0;
 }
 
-// ---------------------------------------------------------------- near-miss
-
-export const NEAR_MISS_MIN_SPEED = 150;
-export const NEAR_MISS_RADIUS = 46;
-export const NEAR_MISS_COOLDOWN = 1.5;
-
-export function nearMissEligible(speed, dist, cooldownLeft) {
-  return speed > NEAR_MISS_MIN_SPEED && dist < NEAR_MISS_RADIUS && cooldownLeft <= 0;
+export function modCost(kind, level) {
+  const track = MOD_SHOP[kind];
+  if (!track || level >= track.costs.length) return null;
+  return track.costs[level];
 }
 
-// ---------------------------------------------------------------- paint shop repaint (round 8)
-
-// Repainting at Lou's costs $50 a coat and cycles the car's colour.
-// The colour persists in the save, so the player's car stays theirs.
-export const PAINT_COLOURS = [
-  { name: 'Heat Red', color: '#d43d2a' },
-  { name: 'Midnight', color: '#22242e' },
-  { name: 'Ocean', color: '#3d7bd4' },
-  { name: 'Lime Rush', color: '#2fae6e' },
-  { name: 'Taxi Gold', color: '#f2c230' },
-  { name: 'Neon Pink', color: '#e26fd5' },
-  { name: 'Ghost White', color: '#e8e4d8' },
-  { name: 'Royal Purple', color: '#5a3d8a' },
-];
-
-export function nextPaintIndex(current) {
-  return (current + 1) % PAINT_COLOURS.length;
+export function buyMod(state, kind) {
+  const level = modLevel(state, kind);
+  const cost = modCost(kind, level);
+  if (cost === null) {
+    state.message = `${MOD_SHOP[kind].name} is already maxed out.`;
+    return false;
+  }
+  if (state.money < cost) {
+    state.message = `Not enough cash — ${MOD_SHOP[kind].name} Lv${level + 1} costs $${cost}.`;
+    return false;
+  }
+  state.money -= cost;
+  state.mods[kind] = level + 1;
+  state.message = `${MOD_SHOP[kind].name} upgraded to Lv${level + 1}! -$${cost}`;
+  return true;
 }
 
-export function paintByIndex(index) {
-  return PAINT_COLOURS[((index % PAINT_COLOURS.length) + PAINT_COLOURS.length) % PAINT_COLOURS.length];
-}
-
-export function canAffordRepaint(money) {
-  return money >= PRICES.paintRepaint;
+// Effective car stats after mods: top speed, max health, grip.
+export function moddedCarStats(state, base) {
+  const engine = MOD_SHOP.engine.speedBonus[modLevel(state, 'engine')] || 0;
+  const armor = MOD_SHOP.armor.healthBonus[modLevel(state, 'armor')] || 0;
+  const grip = MOD_SHOP.tires.gripBonus[modLevel(state, 'tires')] || 0;
+  return { top: base.top + engine, maxHealth: 100 + armor, grip: 1 + grip };
 }

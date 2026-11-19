@@ -1,87 +1,114 @@
 // Solmar Heat — audio.js
-// One job: synthesized sound effects through WebAudio. No audio files,
-// no network — every sound is built from oscillators and noise.
+// All sound is synthesized with WebAudio — no audio files, no network.
+// A whoosh for near misses, a crack for shots, a thud for crashes, a
+// chime for coins, and a low siren wail while the police are close.
+// Everything is guarded so the game runs silently (and fine) where
+// AudioContext does not exist, and M toggles mute.
 
-export function createAudio() {
-  const audio = {
-    muted: false,
-    ctx: null,
-    master: null,
-    sirenOn: false,
-    ensure() {
-      if (this.ctx) return true;
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) return false;
-        this.ctx = new Ctx();
-        this.master = this.ctx.createGain();
-        this.master.gain.value = 0.35;
-        this.master.connect(this.ctx.destination);
-        return true;
-      } catch (e) {
-        return false;
-      }
-    },
-    resume() {
-      if (this.ctx && this.ctx.state === 'suspended') {
-        this.ctx.resume().catch(() => {});
-      }
-    },
-    tone(freq, duration, type, volume, slideTo) {
-      if (this.muted || !this.ensure()) return;
-      try {
-        const t = this.ctx.currentTime;
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = type || 'sine';
-        osc.frequency.setValueAtTime(freq, t);
-        if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + duration);
-        gain.gain.setValueAtTime(volume || 0.3, t);
-        gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
-        osc.connect(gain);
-        gain.connect(this.master);
-        osc.start(t);
-        osc.stop(t + duration + 0.02);
-      } catch (e) { /* sound is best-effort */ }
-    },
-    noise(duration, volume, filterFreq) {
-      if (this.muted || !this.ensure()) return;
-      try {
-        const t = this.ctx.currentTime;
-        const len = Math.max(1, Math.floor(this.ctx.sampleRate * duration));
-        const buffer = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-        const src = this.ctx.createBufferSource();
-        src.buffer = buffer;
-        const filter = this.ctx.createBiquadFilter();
-        filter.type = 'bandpass';
-        filter.frequency.value = filterFreq || 1200;
-        const gain = this.ctx.createGain();
-        gain.gain.value = volume || 0.3;
-        src.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.master);
-        src.start(t);
-      } catch (e) { /* sound is best-effort */ }
-    },
-    shoot() { this.noise(0.12, 0.5, 900); this.tone(180, 0.08, 'square', 0.15, 60); },
-    punch() { this.noise(0.08, 0.35, 300); },
-    crash() { this.noise(0.25, 0.5, 220); this.tone(70, 0.25, 'sine', 0.4, 40); },
-    whoosh() { this.noise(0.35, 0.3, 2400); },
-    coin() { this.tone(880, 0.12, 'sine', 0.3); this.tone(1320, 0.18, 'sine', 0.25); },
-    pickup() { this.tone(660, 0.1, 'triangle', 0.3, 990); },
-    success() {
-      this.tone(523, 0.14, 'triangle', 0.3);
-      setTimeout(() => this.tone(659, 0.14, 'triangle', 0.3), 120);
-      setTimeout(() => this.tone(784, 0.22, 'triangle', 0.3), 240);
-    },
-    fail() { this.tone(220, 0.3, 'sawtooth', 0.25, 110); },
-    siren() { this.tone(700, 0.5, 'sine', 0.08, 950); },
-    toggleMute() {
-      this.muted = !this.muted;
-      return this.muted;
-    },
-  };
-  return audio;
+let ctx = null;
+let muted = false;
+
+function audio() {
+  if (muted) return null;
+  if (typeof window === 'undefined' || typeof window.AudioContext === 'undefined') return null;
+  try {
+    if (!ctx) ctx = new window.AudioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  } catch {
+    return null;
+  }
 }
+
+export function isMuted() {
+  return muted;
+}
+
+export function toggleMute() {
+  muted = !muted;
+  return muted;
+}
+
+// One short oscillator blip: frequency slides from f0 to f1 over dur.
+function blip(f0, f1, dur, type, gain) {
+  const ac = audio();
+  if (!ac) return;
+  try {
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(f0, ac.currentTime);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), ac.currentTime + dur);
+    g.gain.setValueAtTime(gain || 0.08, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+    o.connect(g);
+    g.connect(ac.destination);
+    o.start();
+    o.stop(ac.currentTime + dur);
+  } catch {
+    // Sound must never break the game.
+  }
+}
+
+// Filtered noise burst: the whoosh and the crash.
+function noise(dur, filterFreq, gain) {
+  const ac = audio();
+  if (!ac) return;
+  try {
+    const len = Math.floor(ac.sampleRate * dur);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const filter = ac.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = filterFreq;
+    const g = ac.createGain();
+    g.gain.value = gain || 0.12;
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(ac.destination);
+    src.start();
+  } catch {
+    // Sound must never break the game.
+  }
+}
+
+export const sfx = {
+  shot() {
+    blip(900, 120, 0.09, 'square', 0.09);
+    noise(0.06, 2400, 0.06);
+  },
+  punch() {
+    noise(0.08, 300, 0.14);
+  },
+  crash() {
+    noise(0.22, 180, 0.2);
+    blip(140, 40, 0.2, 'sawtooth', 0.1);
+  },
+  whoosh() {
+    noise(0.35, 900, 0.12);
+  },
+  coin() {
+    blip(880, 880, 0.07, 'sine', 0.1);
+    setTimeout(() => blip(1320, 1320, 0.12, 'sine', 0.1), 70);
+  },
+  pickup() {
+    blip(520, 780, 0.1, 'sine', 0.1);
+  },
+  success() {
+    blip(523, 523, 0.1, 'sine', 0.1);
+    setTimeout(() => blip(659, 659, 0.1, 'sine', 0.1), 90);
+    setTimeout(() => blip(784, 784, 0.18, 'sine', 0.12), 180);
+  },
+  fail() {
+    blip(300, 150, 0.35, 'sawtooth', 0.08);
+  },
+  siren() {
+    blip(700, 950, 0.4, 'sine', 0.04);
+  },
+  click() {
+    blip(600, 600, 0.04, 'square', 0.05);
+  },
+};

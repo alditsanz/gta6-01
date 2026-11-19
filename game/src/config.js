@@ -1,121 +1,264 @@
 // Solmar Heat — config.js
-// One job: every fixed number, name and table the rest of the game reads.
-// Nothing here touches the DOM, so the logic test can import it directly.
+// Every tunable number and every piece of static game data lives here, in
+// one place, so the rest of the game reads like a story instead of a pile
+// of magic numbers. Nothing in this file touches the DOM or the network.
 
-export const WORLD_SIZE = 2440;
-export const ROAD_START = 40;
-export const ROAD_STEP = 264;
-export const ROAD_COUNT = 9;
+export const WORLD = 2440; // world is WORLD x WORLD units, origin top-left
+export const ROAD_W = 64; // width of every street
+export const ROAD_GAP = 252; // distance between neighbouring road lines
 
-// The nine road lines, both axes. Road 8 sits at 40 + 8 * 264 = 2152.
-export function roadPositions() {
-  const out = [];
-  for (let i = 0; i < ROAD_COUNT; i++) out.push(ROAD_START + i * ROAD_STEP);
-  return out;
-}
+// The nine road lines in each direction. Road 8 sits at 2151 — the far
+// road the player must be able to reach, so the movement clamp in main.js
+// covers the whole grid, not just the middle of town.
+export const ROADS = [135, 387, 639, 891, 1143, 1395, 1647, 1899, 2151];
 
-export const ROADS = roadPositions();
+export const VIEW_W = 1280;
+export const VIEW_H = 720;
 
-export const SAVE_KEY = 'solmar-heat-save-v8';
-export const SAVE_VERSION = 8;
-
-// Ten districts that tile the whole map, no gaps, no overlaps.
-export const DISTRICTS = [
-  { name: 'Sunset Mile',   x0: 0,    y0: 0,    x1: 813,  y1: 813,  color: '#e8a34c' },
-  { name: 'Cactus Court',  x0: 813,  y0: 0,    x1: 1626, y1: 813,  color: '#7fb069' },
-  { name: 'Neon Strip',    x0: 1626, y0: 0,    x1: 2440, y1: 813,  color: '#e26fd5' },
-  { name: 'Marina',        x0: 0,    y0: 813,  x1: 813,  y1: 1626, color: '#4fa8c9' },
-  { name: 'Old Foundry',   x0: 813,  y0: 813,  x1: 1626, y1: 1220, color: '#9a8f7a' },
-  { name: 'Harbor Lights', x0: 813,  y0: 1220, x1: 1626, y1: 1626, color: '#c9b458' },
-  { name: 'Canal Row',     x0: 1626, y0: 813,  x1: 2440, y1: 1626, color: '#5ec2b8' },
-  { name: 'Pier 9',        x0: 0,    y0: 1626, x1: 813,  y1: 2440, color: '#8a6fd6' },
-  { name: 'Vista Heights', x0: 1626, y0: 1626, x1: 2440, y1: 2033, color: '#d97b6c' },
-  { name: 'Coral Bay',     x0: 1626, y0: 2033, x1: 2440, y1: 2440, color: '#f2a541' },
+// ---------------------------------------------------------------- districts
+// Ten districts on a 5-column x 2-row map. The column is picked from x,
+// the row from y, so districtAt() is a pure function of position.
+export const DISTRICT_COLS = [
+  'Sunset Mile',
+  'Cactus Court',
+  'Neon Strip',
+  'Palm Row',
+  'Canal Row',
+];
+export const DISTRICT_ROWS = [
+  ['Sunset Mile', 'Cactus Court', 'Neon Strip', 'Palm Row', 'Canal Row'],
+  ['Marina', 'Harbor Lights', 'Old Solmar', 'Dune Fields', 'Pier 9'],
 ];
 
-// Twelve stealable cars. The Falco is the common street car; the Vento
-// is the city's taxi. Each has its own top speed and colour.
+export function districtAt(x, y) {
+  const col = Math.max(0, Math.min(4, Math.floor(x / 488)));
+  const row = y < WORLD / 2 ? 0 : 1;
+  return DISTRICT_ROWS[row][col];
+}
+
+// ------------------------------------------------------------------- cars
+// Twelve stealable cars. Each model has its own colour, top speed and
+// acceleration; the Falco is the quick getaway car, the Vento is the taxi.
 export const CARS = [
-  { model: 'Falco',   color: '#d43d2a', topSpeed: 430, parked: { x: 320,  y: 300 } },
-  { model: 'Vento',   color: '#f2c230', topSpeed: 400, parked: { x: 1900, y: 320 } },
-  { model: 'Comet',   color: '#3d7bd4', topSpeed: 470, parked: { x: 600,  y: 900 } },
-  { model: 'Bravo',   color: '#2fae6e', topSpeed: 410, parked: { x: 1100, y: 500 } },
-  { model: 'Sable',   color: '#22242e', topSpeed: 450, parked: { x: 1500, y: 1400 } },
-  { model: 'Dusty',   color: '#b08954', topSpeed: 380, parked: { x: 300,  y: 1800 } },
-  { model: 'Kite',    color: '#e26fd5', topSpeed: 440, parked: { x: 2100, y: 1000 } },
-  { model: 'Marlin',  color: '#4fa8c9', topSpeed: 420, parked: { x: 900,  y: 2100 } },
-  { model: 'Onyx',    color: '#5a3d8a', topSpeed: 460, parked: { x: 1750, y: 1900 } },
-  { model: 'Rover',   color: '#7a7f8a', topSpeed: 390, parked: { x: 1300, y: 700 } },
-  { model: 'Zephyr',  color: '#e8e4d8', topSpeed: 480, parked: { x: 2200, y: 500 } },
-  { model: 'Lumen',   color: '#39c2a5', topSpeed: 435, parked: { x: 700,  y: 1500 } },
+  { model: 'Falco', color: '#e33f2f', top: 330, accel: 250 },
+  { model: 'Vento', color: '#f2c230', top: 280, accel: 210, taxi: true },
+  { model: 'Comet', color: '#3f7de3', top: 315, accel: 235 },
+  { model: 'Bravo', color: '#7a4fd0', top: 295, accel: 220 },
+  { model: 'Sable', color: '#22262e', top: 305, accel: 225 },
+  { model: 'Dune', color: '#d08a3f', top: 270, accel: 200 },
+  { model: 'Harlow', color: '#3fd0c0', top: 290, accel: 215 },
+  { model: 'Marlin', color: '#2f8f5b', top: 285, accel: 210 },
+  { model: 'Kestrel', color: '#e3e3e3', top: 320, accel: 240 },
+  { model: 'Prowler', color: '#8a2f5b', top: 300, accel: 222 },
+  { model: 'Solstice', color: '#f27bb0', top: 288, accel: 212 },
+  { model: 'Mirage', color: '#c8b45a', top: 310, accel: 232 },
 ];
 
+// ------------------------------------------------------------------ ranks
+// Rank titles, 1-based: index 5 is "Street Royalty", index 6 is the
+// story-complete "Solmar Legend".
 export const RANKS = [
-  { min: 0,     title: 'Street Rookie' },
-  { min: 500,   title: 'Corner Regular' },
-  { min: 1500,  title: 'Mile Runner' },
-  { min: 3000,  title: 'Wheelman' },
-  { min: 5000,  title: 'King of the Mile' },
-  { min: 8000,  title: 'Sunset Boss' },
-  { min: 12000, title: 'Street Royalty' },
-  { min: 20000, title: 'Solmar Legend' },
+  'Wheelman',
+  'Street Hustler',
+  'Mile Runner',
+  'King of the Mile',
+  'Neon Baron',
+  'Street Royalty',
+  'Solmar Legend',
 ];
 
-export function rankForScore(score) {
-  let rank = RANKS[0];
-  for (const r of RANKS) if (score >= r.min) rank = r;
-  return rank;
-}
+// -------------------------------------------------------------- story jobs
+// Seven story jobs about the driver, Lena Voss and the crime boss Kane.
+// target: where the job points; timer: seconds (0 = no timer);
+// stars: wanted stars applied when the job starts.
+export const MISSIONS = [
+  {
+    id: 1,
+    name: 'First Wheels',
+    brief: 'Steal any car and bring it to the Sunset Mile marker.',
+    payout: 200,
+    timer: 0,
+    stars: 0,
+    target: { x: 387, y: 387, label: 'Sunset Mile marker' },
+    needCar: true,
+  },
+  {
+    id: 2,
+    name: "Lena's Errand",
+    brief: 'Pick up Lena Voss and drive her to the Cactus Court plaza.',
+    payout: 350,
+    timer: 150,
+    stars: 0,
+    target: { x: 891, y: 387, label: 'Cactus Court plaza' },
+    needCar: true,
+  },
+  {
+    id: 3,
+    name: 'The Quiet Lift',
+    brief: 'Steal a Falco and deliver it to the Neon Strip garage.',
+    payout: 500,
+    timer: 180,
+    stars: 1,
+    target: { x: 1899, y: 387, label: 'Neon Strip garage' },
+    needModel: 'Falco',
+  },
+  {
+    id: 4,
+    name: 'Hot Pursuit',
+    brief: 'Shake the heat: reach the Marina with 2 stars on your tail.',
+    payout: 700,
+    timer: 180,
+    stars: 2,
+    target: { x: 387, y: 1899, label: 'Marina dock' },
+    needCar: true,
+  },
+  {
+    id: 5,
+    name: 'Dead Drop',
+    brief: 'Carry the package to Canal Row. Do not let the police spot you.',
+    payout: 900,
+    timer: 200,
+    stars: 0,
+    target: { x: 2151, y: 639, label: 'Canal Row drop' },
+    needCar: false,
+  },
+  {
+    id: 6,
+    name: 'Pier 9 Getaway — Lena Voss',
+    brief: 'Reach Pier 9 before the timer runs out. 3 stars from the start.',
+    payout: 1500,
+    timer: 120,
+    stars: 3,
+    target: { x: 2151, y: 2151, label: 'Pier 9' },
+    needCar: true,
+  },
+  {
+    id: 7,
+    name: 'The Last Ledger',
+    brief:
+      "Steal Kane's ledger from SCPD Headquarters, clear 3 guards, grab the ledger, then escape to the Marina in 90 seconds under a 4-star manhunt.",
+    payout: 4000,
+    timer: 0, // the 90 s escape timer starts when the ledger is grabbed
+    stars: 0,
+    target: { x: 1143, y: 1143, label: 'SCPD Headquarters' },
+    needCar: false,
+    finale: true,
+  },
+];
 
-export const PRICES = {
-  coin: 75,
-  nearMiss: 15,
-  fareBase: 310,
-  paintRepaint: 50,
-  guardDrop: 50,
-  turfIncomePerHour: 5,
-  turfAllBonus: 500,
+// --------------------------------------------------------------- side work
+export const FARE_PAY = 310; // a taxi fare pays around $310
+export const COIN_PAY = 75; // each hidden Solmar coin
+export const NEAR_MISS_PAY = 15; // threading past traffic at speed
+export const NEAR_MISS_SPEED = 150; // speed needed for a near miss
+export const NEAR_MISS_COOLDOWN = 1.5; // seconds between near-miss payouts
+export const DELIVERY_PAY = 250;
+export const DELIVERY_TIME = 150;
+export const RACE_PAYOUTS = { easy: 150, medium: 300, hard: 600 };
+export const TURF_INCOME_PER_HOUR = 5; // $ per zone held, per game hour
+export const TURF_ALL_BONUS = 500; // holding every zone at once
+export const PAINT_COST = 50; // heat clear + full repair at Lou's
+export const REPAINT_COST = 25; // change the car's colour
+export const CAR_DAMAGE_PER_HIT = 8; // wall hits cost 8 car health
+export const MOD_SHOP = {
+  // Lou's Mod Shop (new in round 9): three upgrade tracks, three levels.
+  engine: { name: 'Engine', costs: [300, 600, 1000], speedBonus: [0, 45, 90, 140] },
+  armor: { name: 'Armor', costs: [250, 500, 900], healthBonus: [0, 40, 80, 140] },
+  tires: { name: 'Tires', costs: [200, 450, 800], gripBonus: [0, 0.12, 0.24, 0.38] },
 };
 
-export const WANTED = {
-  maxHeat: 100,
-  bandSize: 20,
-  decayPerSecond: 1.5,
-  stealHeat: 12,
-  shootHeat: 8,
-  speedHeat: 5,
-  deliverySpotHeat: 10,
-};
+// ------------------------------------------------------------------ wanted
+export const HEAT_PER_STAR = 20; // heat 0..100, one star per 20 heat
+export const HEAT_DECAY_PER_SEC = 1.5; // heat fades while the player lays low
+export const HEAT_STEAL = 25;
+export const HEAT_SHOT = 10;
+export const HEAT_SPEEDING = 5;
+export const HEAT_DELIVERY_SPOTTED = 8;
 
-export const CAR = {
-  maxHealth: 100,
-  wallHitDamage: 8,
-  trafficHitDamage: 5,
-  wallHitCooldown: 0.5,
-};
+// ------------------------------------------------------------------- clock
+// One full in-game day lasts 360 real seconds (6 minutes).
+export const DAY_LENGTH_SEC = 360;
+export const CLOCK_START_HOUR = 8; // the game opens at 08:00
 
-export const PLAYER = {
-  walkSpeed: 230,
-  sprintSpeed: 350,
-  health: 100,
-  magSize: 12,
-  reserveAmmo: 48,
-  punchRange: 55,
-  punchDamage: 1,
-};
+// ------------------------------------------------------------------ turf
+export const TURF_ZONES = [
+  { name: 'Sunset Mile', rect: { x: 135, y: 135, w: 700, h: 700 }, owner: 'Vipers', defaultOwner: 'Vipers', color: '#c0392b' },
+  { name: 'Neon Strip', rect: { x: 1600, y: 135, w: 700, h: 700 }, owner: 'Kings', defaultOwner: 'Kings', color: '#8e44ad' },
+  { name: 'Old Solmar', rect: { x: 800, y: 1220, w: 760, h: 700 }, owner: 'Saints', defaultOwner: 'Saints', color: '#2980b9' },
+  { name: 'Canal Row', rect: { x: 1952, y: 135, w: 488, h: 1085 }, owner: 'Reapers', defaultOwner: 'Reapers', color: '#27ae60' },
+  { name: 'Pier 9', rect: { x: 1600, y: 1600, w: 800, h: 700 }, owner: 'Vipers', defaultOwner: 'Vipers', color: '#c0392b' },
+];
 
-export const CLOCK = {
-  // One full in-game day lasts 360 real seconds.
-  dayLengthSeconds: 360,
-  startHour: 8,
-};
+// ------------------------------------------------------------------ coins
+// Ten hidden Solmar coins on fixed grid cells, $75 each.
+export const COIN_SPOTS = [
+  { x: 639, y: 891 },
+  { x: 891, y: 135 },
+  { x: 1395, y: 891 },
+  { x: 2151, y: 387 },
+  { x: 639, y: 1647 },
+  { x: 1647, y: 1395 },
+  { x: 135, y: 2151 },
+  { x: 1899, y: 1899 },
+  { x: 1143, y: 639 },
+  { x: 2151, y: 1647 },
+];
 
-export const WEATHER_CYCLE_SECONDS = 90;
+// --------------------------------------------------------------- landmarks
+export const LANDMARKS = [
+  { name: 'SCPD Headquarters', x: 1143, y: 1143, kind: 'hq' },
+  { name: "Lou's Paint Shop", x: 387, y: 639, kind: 'paint' },
+  { name: "Lou's Mod Shop", x: 639, y: 387, kind: 'modshop' },
+  { name: 'Marina', x: 387, y: 2151, kind: 'marina' },
+  { name: 'Pier 9', x: 2151, y: 2151, kind: 'pier' },
+  { name: 'Cactus Court Plaza', x: 891, y: 387, kind: 'plaza' },
+  { name: 'Canal Row Locks', x: 2151, y: 891, kind: 'locks' },
+  { name: 'Sunset Mile Arch', x: 135, y: 135, kind: 'arch' },
+];
 
-// Rush-hour windows, in clock hours.
-export const RUSH_MORNING = [7, 9];
-export const RUSH_EVENING = [17, 19];
-export const NIGHT_QUIET = [0, 5];
-
-export const BASE_TRAFFIC = 14;
-export const BASE_PEDESTRIANS = 26;
+// ------------------------------------------------------------------- races
+// Three race routes, one per difficulty, each a run of checkpoints.
+export const RACES = [
+  {
+    id: 'easy',
+    name: 'Sunset Sprint',
+    district: 'Sunset Mile',
+    par: 75,
+    checkpoints: [
+      { x: 387, y: 387 },
+      { x: 891, y: 387 },
+      { x: 891, y: 891 },
+      { x: 387, y: 891 },
+    ],
+  },
+  {
+    id: 'medium',
+    name: 'Neon Loop',
+    district: 'Neon Strip',
+    par: 110,
+    checkpoints: [
+      { x: 1647, y: 387 },
+      { x: 2151, y: 387 },
+      { x: 2151, y: 891 },
+      { x: 1647, y: 891 },
+      { x: 1647, y: 1395 },
+      { x: 2151, y: 1395 },
+    ],
+  },
+  {
+    id: 'hard',
+    name: 'Solmar Grand Tour',
+    district: 'Old Solmar',
+    par: 170,
+    checkpoints: [
+      { x: 387, y: 387 },
+      { x: 1143, y: 387 },
+      { x: 2151, y: 639 },
+      { x: 2151, y: 1647 },
+      { x: 1143, y: 2151 },
+      { x: 387, y: 2151 },
+      { x: 387, y: 1143 },
+      { x: 1143, y: 1143 },
+    ],
+  },
+];

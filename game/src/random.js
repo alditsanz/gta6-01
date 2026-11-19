@@ -1,7 +1,7 @@
 // Solmar Heat — random.js
-// One job: a small seeded random generator and the helpers built on it.
-// The world layout, traffic and pedestrians all draw from seeded streams,
-// so a given seed always builds the same city.
+// A tiny seeded random number generator (mulberry32) so the city layout,
+// traffic and weather are deterministic from a seed, and so the logic
+// test can replay the exact same world twice and compare byte for byte.
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -14,52 +14,27 @@ export function mulberry32(seed) {
   };
 }
 
-export function makeRng(seed) {
-  return mulberry32(seed);
-}
-
-export function randRange(rng, min, max) {
-  return min + rng() * (max - min);
-}
-
-export function randInt(rng, min, max) {
-  return Math.floor(randRange(rng, min, max + 1));
-}
-
-export function randPick(rng, list) {
-  return list[Math.floor(rng() * list.length)];
-}
-
-export function randChance(rng, probability) {
-  return rng() < probability;
-}
-
-// Fisher-Yates shuffle that returns a new array, leaving the input alone.
-export function shuffled(rng, list) {
-  const out = list.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = out[i];
-    out[i] = out[j];
-    out[j] = tmp;
-  }
-  return out;
-}
-
-export function clamp(value, min, max) {
-  return value < min ? min : value > max ? max : value;
-}
-
-export function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
-export function distance(ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-export function angleTo(ax, ay, bx, by) {
-  return Math.atan2(by - ay, bx - ax);
+// A small helper object around one generator, with the calls the game
+// actually needs. Create one per game with a fixed seed for a stable city.
+export function createRng(seed) {
+  const next = mulberry32(seed);
+  return {
+    next,
+    // float in [min, max)
+    range(min, max) {
+      return min + next() * (max - min);
+    },
+    // integer in [min, max] inclusive
+    int(min, max) {
+      return Math.floor(min + next() * (max - min + 1));
+    },
+    // one element of an array
+    pick(list) {
+      return list[Math.floor(next() * list.length)];
+    },
+    // true with probability p (0..1)
+    chance(p) {
+      return next() < p;
+    },
+  };
 }
