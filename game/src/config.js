@@ -1,50 +1,67 @@
-// Solmar Heat — config.js
-// Every tuning constant for the city lives here so the other modules
-// stay free of magic numbers. Round 12 fresh build.
+// config.js — Solmar Heat shared constants and tiny math helpers.
+// One job: every magic number the rest of the game agrees on lives here.
 
-export const WORLD_SIZE = 3600;
-export const GRID = 9;                 // 9x9 street grid
-export const BLOCK = 400;              // distance between avenues
-export const ROAD_W = 92;              // road width in world units
-export const SIDEWALK = 14;
+export const WORLD_SIZE = 3600;      // the city is a square, 3600 x 3600
+export const GRID = 9;               // 9 x 9 blocks
+export const BLOCK = 400;            // one block is 400 x 400
+export const ROAD_W = 92;            // road band width around each block
+export const VIEW_W = 1280;          // canvas size the game renders at
+export const VIEW_H = 720;
+export const SEED = 20261121;        // fixed world seed (deterministic city)
 
-export const PLAYER = {
-  radius: 13,
-  walkSpeed: 168,
-  sprintSpeed: 252,
-  health: 100,
-  safehouse: { x: 420, y: 420 },
-};
-
-export const WANTED = {
-  maxStars: 5,
-  band: 100,                 // heat points per star
-  decayDelay: 26,            // clean seconds before one star cools
-  bustTime: 1.6,             // seconds a foot cop must hold to bust
-  finePerStar: 40,
-  fineCap: 200,
-};
-
-export const CAR_TYPES = [
-  { id: 'sedan',  name: 'Solmar Sedan',  top: 305, accel: 150, grip: 3.4, len: 46, wid: 22, hp: 100, color: '#7fb2d9' },
-  { id: 'coupe',  name: 'Coupe GT',      top: 385, accel: 205, grip: 3.9, len: 44, wid: 21, hp: 95,  color: '#d97f9e' },
-  { id: 'sports', name: 'Falco S',       top: 470, accel: 265, grip: 4.4, len: 45, wid: 21, hp: 90,  color: '#e8b13c' },
-  { id: 'taxi',   name: 'Vento Taxi',    top: 320, accel: 160, grip: 3.5, len: 47, wid: 22, hp: 105, color: '#f2c230' },
-  { id: 'vento',  name: 'Vento',         top: 340, accel: 175, grip: 3.6, len: 47, wid: 22, hp: 110, color: '#c0272d' },
-  { id: 'van',    name: 'Harbor Van',    top: 265, accel: 125, grip: 3.0, len: 54, wid: 25, hp: 130, color: '#b9c4c9' },
-  { id: 'truck',  name: 'Dock Truck',    top: 240, accel: 105, grip: 2.7, len: 62, wid: 27, hp: 150, color: '#8a97a3' },
-  { id: 'pickup', name: 'Dune Pickup',   top: 330, accel: 170, grip: 3.3, len: 50, wid: 24, hp: 120, color: '#6fae6a' },
-  { id: 'muscle', name: 'Marlin Muscle', top: 430, accel: 240, grip: 3.8, len: 48, wid: 23, hp: 100, color: '#7a4fd0' },
-  { id: 'compact',name: 'Pico Compact',  top: 285, accel: 145, grip: 3.6, len: 40, wid: 20, hp: 85,  color: '#4fc4b5' },
-  { id: 'limo',   name: 'Regal Limo',    top: 300, accel: 135, grip: 3.1, len: 66, wid: 25, hp: 125, color: '#2e3440' },
-  { id: 'police', name: 'SCPD Cruiser',  top: 445, accel: 250, grip: 4.2, len: 48, wid: 22, hp: 140, color: '#eef2f5' },
+// District names, row-major over a 3 x 3 super-grid of block groups.
+export const DISTRICTS = [
+  'Sunset Mile', 'Cactus Court', 'Neon Strip',
+  'Old Market', 'Downtown Solmar', 'Canal Row',
+  'Palm Heights', 'The Marina', 'Pier 9 Docks',
 ];
 
-export const COLORS = {
-  sky: '#ffd9a0', road: '#3c4148', roadEdge: '#565d66',
-  sidewalk: '#cbb99b', grass: '#79b657', sand: '#eed9a4',
-  water: '#3d9db8', gold: '#f5c542', red: '#e23b3b',
-};
+// Rank ladder, worst to best. Story and turf wins climb it.
+export const RANKS = [
+  'Nobody', 'Runner', 'Wheelman', 'Shot Caller',
+  'King of the Mile', 'Solmar Legend',
+];
 
-export const SAVE_KEY = 'solmar-heat-save-v1';
-export const DAY_LENGTH = 300; // seconds per in-game day
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function dist(x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Shortest signed angle from a to b, in (-PI, PI].
+export function angleDelta(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+// Turn `angle` toward `target` by at most `maxStep` radians.
+export function turnToward(angle, target, maxStep) {
+  const d = angleDelta(angle, target);
+  if (Math.abs(d) <= maxStep) return target;
+  return angle + Math.sign(d) * maxStep;
+}
+
+// Is this point on a road band? Roads run along block borders:
+// a point is on a road when either coordinate sits within ROAD_W/2
+// of a multiple of BLOCK.
+export function onRoad(x, y) {
+  const mx = ((x % BLOCK) + BLOCK) % BLOCK;
+  const my = ((y % BLOCK) + BLOCK) % BLOCK;
+  const half = ROAD_W / 2;
+  return mx < half || mx > BLOCK - half || my < half || my > BLOCK - half;
+}
+
+// Road centre-line coordinate nearest to v (roads centre on multiples
+// of BLOCK, wrapped so the far edge road sits at WORLD_SIZE too).
+export function roadLine(v) {
+  return Math.round(v / BLOCK) * BLOCK;
+}

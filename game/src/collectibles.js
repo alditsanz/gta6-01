@@ -1,56 +1,63 @@
-// Solmar Heat — collectibles.js
-// Ten hidden Solmar coins ($75 each), health and ammo pickups, and
-// near-miss bonuses for threading past traffic at speed.
+// collectibles.js — the 10 hidden Solmar coins and world pickups.
+// One job: place the coins, watch for the player walking/driving over
+// coins and pickups, and pay out their effects.
 
-import { dist } from './random.js';
+import { dist } from './config.js';
 
+// Fixed hiding spots, spread across all nine districts.
 export const COIN_SPOTS = [
-  [600, 1800], [1400, 600], [2200, 3000], [3000, 1800], [800, 3200],
-  [2600, 800], [1800, 1400], [3400, 2600], [400, 2600], [2000, 2200],
+  { x: 620, y: 620 }, { x: 1800, y: 660 }, { x: 3020, y: 500 },
+  { x: 500, y: 1800 }, { x: 2220, y: 1420 }, { x: 3260, y: 1900 },
+  { x: 1020, y: 2380 }, { x: 1800, y: 2980 }, { x: 2620, y: 2620 },
+  { x: 3380, y: 3380 },
 ];
-export function createCollectibles() {
-  return {
-    coins: COIN_SPOTS.map(([x, y], i) => ({ id: i, x, y, taken: false })),
-    pickups: [
-      { kind: 'health', x: 660, y: 2980, taken: false },
-      { kind: 'ammo', x: 1840, y: 1760, taken: false },
-      { kind: 'health', x: 2900, y: 660, taken: false },
-      { kind: 'ammo', x: 1060, y: 1060, taken: false },
-    ],
-    nearMissCooldown: 0,
-  };
+
+export const COIN_VALUE = 75;
+
+export function makeCoins() {
+  return COIN_SPOTS.map((s) => ({ x: s.x, y: s.y, taken: false }));
 }
-export function coinsFound(c) { return c.coins.filter((x) => x.taken).length; }
+
+// Pickups sit near landmarks: health at the hospital, armour at HQ,
+// ammo at the plaza and the pier.
+export function makePickups() {
+  return [
+    { kind: 'health', x: 700, y: 3020, taken: false, respawn: 0 },
+    { kind: 'armor', x: 1880, y: 500, taken: false, respawn: 0 },
+    { kind: 'ammo', x: 1100, y: 1100, taken: false, respawn: 0 },
+    { kind: 'ammo', x: 3180, y: 3180, taken: false, respawn: 0 },
+    { kind: 'health', x: 3340, y: 1100, taken: false, respawn: 0 },
+  ];
+}
+
+export function coinsTaken(world) {
+  return world.coins.filter((c) => c.taken).length;
+}
+
+// Per-frame check. Returns a short event string when something was
+// picked up ('coin' | 'health' | 'armor' | 'ammo') or null.
 export function stepCollectibles(world, dt) {
-  const c = world.collectibles; const p = world.player;
-  c.nearMissCooldown = Math.max(0, c.nearMissCooldown - dt);
-  for (const coin of c.coins) {
-    if (!coin.taken && dist(p.x, p.y, coin.x, coin.y) < 30) {
-      coin.taken = true; p.money += 75; p.coins = coinsFound(c);
-      world.events.push({ type: 'coin', amount: 75 });
+  const p = world.player;
+  let event = null;
+  for (const c of world.coins) {
+    if (!c.taken && dist(p.x, p.y, c.x, c.y) < 26) {
+      c.taken = true;
+      p.money += COIN_VALUE;
+      p.score += 50;
+      event = 'coin';
     }
   }
-  for (const pk of c.pickups) {
-    if (!pk.taken && dist(p.x, p.y, pk.x, pk.y) < 30) {
-      pk.taken = true;
-      if (pk.kind === 'health') p.health = Math.min(100, p.health + 40);
-      else p.reserve = Math.min(96, p.reserve + 24);
-      world.events.push({ type: 'pickup', kind: pk.kind });
+  for (const pk of world.pickups) {
+    if (pk.taken) {
+      pk.respawn -= dt;
+      if (pk.respawn <= 0) pk.taken = false;
+      continue;
+    }
+    if (dist(p.x, p.y, pk.x, pk.y) < 26) {
+      if (pk.kind === 'health' && p.hp < 100) { p.hp = Math.min(100, p.hp + 35); pk.taken = true; pk.respawn = 45; event = 'health'; }
+      if (pk.kind === 'armor' && p.armor < 100) { p.armor = Math.min(100, p.armor + 50); pk.taken = true; pk.respawn = 45; event = 'armor'; }
+      if (pk.kind === 'ammo') { p.reserve += 36; pk.taken = true; pk.respawn = 45; event = 'ammo'; }
     }
   }
-  // Near miss: fast, close, no contact, with a cooldown.
-  if (p.car && c.nearMissCooldown <= 0) {
-    const speed = Math.abs(p.car.speed);
-    if (speed > 150) {
-      for (const other of world.cars) {
-        if (other === p.car || other.wrecked) continue;
-        const d = dist(p.car.x, p.car.y, other.x, other.y);
-        if (d > 34 && d < 62) {
-          c.nearMissCooldown = 1.5; p.money += 15; p.nearMisses += 1;
-          world.events.push({ type: 'nearmiss', amount: 15 });
-          break;
-        }
-      }
-    }
-  }
+  return event;
 }

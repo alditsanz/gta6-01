@@ -1,87 +1,111 @@
-// Solmar Heat — audio.js
-// All sound is synthesised with WebAudio: engine hum, sirens, shots,
-// pickups, jingles and a warm Am-F-C-G pad-and-bass loop. No assets.
-// In Node (logic tests) every method is a safe no-op.
+// audio.js — synthesized sound, no assets: WebAudio beeps, noise
+// whooshes, a two-tone siren and a lazy bassline.
+// One job: own the AudioContext and expose one method per sound.
+// Everything is guarded — no context, no sound, no crash.
 
 export class AudioSys {
   constructor() {
-    this.ctx = null; this.muted = false; this.master = null;
-    this.engineOsc = null; this.engineGain = null;
-    this.sirenOsc = null; this.sirenGain = null; this.musicTimer = 0;
+    this.ctx = null;
+    this.master = null;
+    this.muted = false;
+    this.musicTimer = 0;
+    this.noteIdx = 0;
+    this.sirenOsc = null;
+    this.sirenGain = null;
+    this.sirenFlip = 0;
   }
+
   ensure() {
-    if (this.ctx || typeof window === 'undefined') return this.ctx;
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      return true;
+    }
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return null;
+      if (!AC) return false;
       this.ctx = new AC();
-      this.master = this.ctx.createGain(); this.master.gain.value = 0.5;
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.32;
       this.master.connect(this.ctx.destination);
-    } catch { this.ctx = null; }
-    return this.ctx;
+      return true;
+    } catch {
+      return false;
+    }
   }
-  toggleMute() { this.muted = !this.muted; if (this.master) this.master.gain.value = this.muted ? 0 : 0.5; return this.muted; }
-  tone(freq, dur, type, vol, slideTo) {
-    if (!this.ensure() || this.muted) return;
+
+  tone(freq, dur, type = 'square', vol = 0.2, slide = 0) {
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
-    const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
-    o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur);
-    g.gain.setValueAtTime(vol || 0.15, t);
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
+    g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.02);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + dur + 0.02);
   }
-  noise(dur, vol) {
-    if (!this.ensure() || this.muted) return;
-    const n = Math.floor(this.ctx.sampleRate * dur);
-    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
-    const src = this.ctx.createBufferSource(); src.buffer = buf;
-    const g = this.ctx.createGain(); g.gain.value = vol || 0.2;
-    src.connect(g); g.connect(this.master); src.start();
+
+  noise(dur, vol = 0.2, freq = 900) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.sin(i * 12.9898) * 43758.5453 % 1) * (1 - i / len);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = freq;
+    const g = this.ctx.createGain();
+    g.gain.value = vol;
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t);
   }
-  shot() { this.noise(0.09, 0.25); this.tone(160, 0.08, 'square', 0.08, 60); }
-  punch() { this.noise(0.06, 0.15); }
-  pickup() { this.tone(660, 0.09, 'sine', 0.15); setTimeout(() => this.tone(990, 0.12, 'sine', 0.15), 60); }
-  cash() { this.tone(880, 0.08, 'triangle', 0.18); setTimeout(() => this.tone(1320, 0.14, 'triangle', 0.18), 70); }
-  jingle(win) { const seq = win ? [523, 659, 784, 1046] : [392, 330, 262, 196]; seq.forEach((f, i) => setTimeout(() => this.tone(f, 0.22, 'triangle', 0.16), i * 110)); }
-  whoosh() { this.noise(0.18, 0.1); }
-  crash() { this.noise(0.25, 0.3); this.tone(90, 0.2, 'sawtooth', 0.1, 40); }
-  setEngine(on, speedRatio) {
-    if (!this.ensure() || this.muted) return;
-    if (on && !this.engineOsc) {
-      this.engineOsc = this.ctx.createOscillator(); this.engineGain = this.ctx.createGain();
-      this.engineOsc.type = 'sawtooth'; this.engineGain.gain.value = 0.03;
-      this.engineOsc.connect(this.engineGain); this.engineGain.connect(this.master); this.engineOsc.start();
-    }
-    if (this.engineOsc) {
-      this.engineOsc.frequency.value = 55 + Math.abs(speedRatio || 0) * 130;
-      if (!on) { try { this.engineOsc.stop(); } catch { /* already stopped */ } this.engineOsc = null; }
-    }
-  }
-  setSiren(on) {
-    if (!this.ensure() || this.muted) return;
-    if (on && !this.sirenOsc) {
-      this.sirenOsc = this.ctx.createOscillator(); this.sirenGain = this.ctx.createGain();
-      this.sirenOsc.type = 'triangle'; this.sirenGain.gain.value = 0.02;
-      const lfo = this.ctx.createOscillator(); const lg = this.ctx.createGain();
-      lfo.frequency.value = 0.7; lg.gain.value = 180; lfo.connect(lg); lg.connect(this.sirenOsc.frequency);
-      this.sirenOsc.frequency.value = 760; this.sirenOsc.connect(this.sirenGain); this.sirenGain.connect(this.master);
-      this.sirenOsc.start(); lfo.start(); this._sirenLfo = lfo;
-    } else if (!on && this.sirenOsc) {
-      try { this.sirenOsc.stop(); this._sirenLfo.stop(); } catch { /* noop */ }
-      this.sirenOsc = null;
-    }
-  }
-  stepMusic(dt) {
+
+  shot() { this.noise(0.09, 0.25, 1600); this.tone(160, 0.07, 'square', 0.12, -80); }
+  punch() { this.noise(0.06, 0.18, 500); }
+  crash() { this.noise(0.22, 0.3, 300); this.tone(70, 0.2, 'sawtooth', 0.16, -30); }
+  coin() { this.tone(950, 0.07, 'sine', 0.16); setTimeout(() => this.tone(1420, 0.1, 'sine', 0.14), 55); }
+  pickup() { this.tone(620, 0.08, 'sine', 0.15, 240); }
+  nearMiss() { this.noise(0.16, 0.14, 2400); }
+  ui() { this.tone(520, 0.05, 'sine', 0.1); }
+  passed() { this.tone(523, 0.1, 'sine', 0.14); setTimeout(() => this.tone(784, 0.14, 'sine', 0.14), 90); }
+
+  // Called every frame from main: music pulse + siren state.
+  step(world, dt) {
+    if (!this.ensure()) return;
+    // Bassline: a slow island groove while playing.
     this.musicTimer -= dt;
-    if (this.musicTimer <= 0 && this.ctx && !this.muted) {
-      this.musicTimer = 4;
-      const chords = [[220, 261, 329], [174, 220, 261], [196, 246, 293], [164, 196, 246]];
-      const c = chords[Math.floor(Math.random() * chords.length)];
-      c.forEach((f) => this.tone(f, 3.6, 'sine', 0.03));
-      this.tone(c[0] / 2, 3.6, 'triangle', 0.05);
+    if (this.musicTimer <= 0 && !this.muted) {
+      this.musicTimer = 0.42;
+      const bass = [55, 55, 65.4, 55, 82.4, 73.4, 65.4, 49];
+      this.tone(bass[this.noteIdx % bass.length], 0.3, 'triangle', 0.1);
+      this.noteIdx += 1;
+    }
+    // Siren: two-tone while wanted, only when a cop is near.
+    const wantSiren = world.wanted > 0 && !this.muted;
+    if (wantSiren && !this.sirenOsc) {
+      this.sirenOsc = this.ctx.createOscillator();
+      this.sirenGain = this.ctx.createGain();
+      this.sirenOsc.type = 'triangle';
+      this.sirenGain.gain.value = 0.045;
+      this.sirenOsc.connect(this.sirenGain).connect(this.master);
+      this.sirenOsc.start();
+    } else if (!wantSiren && this.sirenOsc) {
+      try { this.sirenOsc.stop(); } catch { /* already stopped */ }
+      this.sirenOsc = null;
+      this.sirenGain = null;
+    }
+    if (this.sirenOsc) {
+      this.sirenFlip -= dt;
+      if (this.sirenFlip <= 0) {
+        this.sirenFlip = 0.38;
+        this.sirenOsc.frequency.value = this.sirenOsc.frequency.value > 800 ? 660 : 920;
+      }
     }
   }
 }
