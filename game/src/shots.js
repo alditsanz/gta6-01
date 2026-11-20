@@ -1,67 +1,62 @@
-// shots.js — deterministic screenshot scenarios.
-// The screenshot harness loads the game with ?shot=<name> and this file
-// arranges a real, playable scene (never a fake composite): the same
-// update/render loop then draws it.
+// Solmar Heat — shots.js
+// Deterministic staging for the four screenshots. The same functions
+// are used by the screenshot script and by the Node logic test, so a
+// scene that stages here is exactly what the camera captures.
+
+import { createWorld, setWanted, enterCar } from './world.js';
+import { startMission, stepMission } from './missions.js';
+import { landmarkById } from './landmarks.js';
 
 export const SHOT_NAMES = ['start', 'drive', 'chase', 'mission'];
 
-export function getShotName(search) {
-  try {
-    const q = new URLSearchParams(search || '');
-    const s = q.get('shot');
-    return SHOT_NAMES.includes(s) ? s : null;
-  } catch (err) {
-    return null;
-  }
-}
-
-// Arrange `game` (the object built in main.js) into a named scene.
-export function applyShotScenario(game, name) {
-  const p = game.player;
+export function stageShot(name, seed) {
+  const world = createWorld(seed == null ? 20261121 : seed);
+  world.gameState = 'play';
   if (name === 'start') {
-    game.mode = 'title';
-    p.x = 660; p.y = 660; p.car = null;
-    game.camera.x = p.x - 640; game.camera.y = p.y - 360;
-    return game;
+    world.gameState = 'title';
+    world.player.x = 1800; world.player.y = 2050;
+    world.weather.clock = 17.6;
+  } else if (name === 'drive') {
+    // Mission 1 completed at Lou's: red Vento parked at the paint
+    // shop, MISSION PASSED +$150 banner up.
+    const paint = landmarkById('paint');
+    enterCar(world, world.vento);
+    world.vento.x = paint.x - 30; world.vento.y = paint.y + 40; world.vento.angle = 0; world.vento.speed = 0;
+    world.player.x = world.vento.x; world.player.y = world.vento.y;
+    world.player.money += 150;
+    world.banner = { text: 'MISSION PASSED', sub: "+$150 — Wheels for Lou · Lou's Paint Shop", t: 999 };
+    world.missionsDone = 1;
+    world.weather.clock = 17.8;
+  } else if (name === 'chase') {
+    // Four-star chase on an avenue: Rex at speed, cruiser behind,
+    // roadblock ahead, helicopter not yet (that is 5 stars).
+    enterCar(world, world.vento);
+    const car = world.vento;
+    car.x = 1800; car.y = 2000; car.angle = -Math.PI / 2; car.speed = 430;
+    world.player.x = car.x; world.player.y = car.y;
+    setWanted(world, 4);
+    world.time = 2;
+    // Force-spawn the response now so the frame is populated.
+    for (let i = 0; i < 30; i++) world.time += 0.016;
+    const paintShopBlock = landmarkById('hq'); void paintShopBlock;
+    world.banner = null;
+    startMission(world, 1);
+    world.mission.distance = 996; // frozen frame: precompute the readout
+    world.weather.clock = 18.1; world.weather.kind = 'clear';
+  } else if (name === 'mission') {
+    // Bank vault standoff: Rex in the circle, vault ~70%, seven
+    // gang members around, three stars.
+    const bank = landmarkById('bank');
+    world.player.x = bank.x; world.player.y = bank.y;
+    startMission(world, 2);
+    world.mission.step = 1; world.vaultProgress = 0.7;
+    world.gang = [];
+    for (let i = 0; i < 7; i++) {
+      world.gang.push({ x: bank.x + 80 + (i % 4) * 44, y: bank.y + 66 - Math.floor(i / 4) * 52, hp: 30 - (i % 3) * 8, angle: 3.14, shootCd: 2, strafe: 1 });
+    }
+    setWanted(world, 3);
+    world.weather.clock = 16.9;
   }
-  game.mode = 'play';
-  if (name === 'drive') {
-    const car = game.cars[0];
-    car.x = 1180; car.y = 1180; car.angle = 0; car.speed = 210;
-    game.enterCar(car);
-    game.weather.setHour(11); game.weather.setWeather('clear');
-    game.message = 'Driving the Falco through Downtown Solmar';
-    game.messageT = 99;
-    return game;
-  }
-  if (name === 'chase') {
-    const car = game.cars[4];
-    car.x = 1440; car.y = 920; car.angle = 0; car.speed = 260;
-    game.enterCar(car);
-    game.startMissionByIndex(5); // Pier 9 Getaway timer on the HUD
-    game.setHeat(450); // 4 stars exactly: roadblocks + pursuit (set after the mission, whose own stars would stack)
-    game.spawnRoadblock();
-    game.missions.timeLeft = 96;
-    game.weather.setHour(18); game.weather.setWeather('clear');
-    // Police right behind the player so the chase reads in one frame.
-    game.police.forEach((cop, i) => {
-      cop.x = car.x - 130 - i * 70; cop.y = car.y + (i % 2 ? 30 : -30);
-      cop.angle = 0;
-    });
-    game.message = 'Police chase! Lose them or reach Pier 9';
-    game.messageT = 99;
-    return game;
-  }
-  if (name === 'mission') {
-    // The Last Ledger at SCPD HQ: guards with pips, stars, ammo on HUD.
-    p.x = 660; p.y = 780; p.car = null;
-    game.startMissionByIndex(6);
-    game.setHeat(350); // mid-band 3+ stars shown with the heist
-    game.police.forEach((cop, i) => { cop.x = 520 + i * 60; cop.y = 520; });
-    game.weather.setHour(15); game.weather.setWeather('clear');
-    game.message = 'The Last Ledger — clear the guards!';
-    game.messageT = 99;
-    return game;
-  }
-  return game;
+  return world;
 }
+export { stepMission };

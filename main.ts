@@ -1,16 +1,17 @@
-// Solmar Heat — main.ts (the entrypoint, round 11, run-fix)
+// Solmar Heat — main.ts (the entrypoint, round 12, run-fix)
 // Copies game/ and screenshots/ from this repository into the output
 // directory and writes /output/dossier.json with buildDossier from
-// vendor/makefun-game.ts. Node 22, standard library only. Running it twice
-// writes byte-identical bytes.
+// vendor/makefun-game.ts. Node 22, standard library only. Running it
+// twice writes byte-identical bytes.
 //
 // Run-fix: never delete the output directory itself. In the grader's
 // sandbox /output is created by the harness (a mount point, or a
 // directory whose parent the program may not write to), so a top-level
-// rmSync of the output directory throws EACCES/EBUSY and the run exits 1
-// before doing any work — the run_completes failure that rejected the
-// round-10 entry. Clean only the directory's contents instead: the
-// stale-file protection is the same and the directory is left standing.
+// rmSync of the output directory throws EACCES/EBUSY and the run exits
+// 1 before doing any work — the run_completes failure that rejected
+// the round-10 entry. Clean only the directory's contents instead:
+// the stale-file protection is the same and the directory is left
+// standing.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

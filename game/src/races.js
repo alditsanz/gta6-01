@@ -1,72 +1,32 @@
-// races.js — three street races, one per difficulty.
-// A checkered starter marker, a chain of checkpoints across the city,
-// a par time, and a cash payout scaled by difficulty. Fail and retry.
+// Solmar Heat — races.js
+// Three street-race routes with checkpoint sequences and par times.
 
-import { dist, ROAD_CENTERS } from './config.js';
-
-function at(col, row) { return { x: ROAD_CENTERS[col], y: ROAD_CENTERS[row] }; }
+import { dist } from './random.js';
 
 export const RACES = [
-  {
-    id: 'race-easy', name: 'Sunset Sprint', difficulty: 'easy', pay: 150, par: 75,
-    start: at(0, 2),
-    checkpoints: [at(2, 2), at(4, 2), at(4, 0), at(6, 0)],
-  },
-  {
-    id: 'race-medium', name: 'Canal Circuit', difficulty: 'medium', pay: 300, par: 115,
-    start: at(6, 6),
-    checkpoints: [at(8, 6), at(8, 8), at(6, 8), at(5, 6), at(6, 4)],
-  },
-  {
-    id: 'race-hard', name: 'Solmar Grand Run', difficulty: 'hard', pay: 600, par: 165,
-    start: at(0, 8),
-    checkpoints: [at(3, 8), at(3, 5), at(6, 5), at(6, 2), at(8, 2), at(8, 0)],
-  },
+  { id: 'mile', name: 'Sunset Mile Sprint', diff: 'easy', par: 75, pay: 150, points: [[1000, 600], [1800, 600], [2600, 1000]] },
+  { id: 'canal', name: 'Canal Row Run', diff: 'medium', par: 105, pay: 300, points: [[3000, 1400], [2200, 2200], [1400, 2600], [1000, 1800]] },
+  { id: 'heat', name: 'Harbor Heat GP', diff: 'hard', par: 140, pay: 600, points: [[600, 3000], [1400, 3000], [2600, 2600], [3000, 1400], [1800, 1000]] },
 ];
-
-export function raceById(id) { return RACES.find((r) => r.id === id) || null; }
-
-export class RaceManager {
-  constructor() {
-    this.active = null;
-    this.index = 0;
-    this.timeLeft = 0;
-    this.elapsed = 0;
-    this.wins = {};
-  }
-
-  start(race) {
-    this.active = race;
-    this.index = 0;
-    this.timeLeft = race.par;
-    this.elapsed = 0;
-    return race;
-  }
-
-  currentCheckpoint() {
-    if (!this.active) return null;
-    return this.active.checkpoints[this.index] || null;
-  }
-
-  update(dt, px, py) {
-    if (!this.active) return null;
-    this.timeLeft -= dt; this.elapsed += dt;
-    if (this.timeLeft <= 0) {
-      const race = this.active; this.active = null;
-      return { type: 'race-failed', race };
+export function createRaceState() { return { active: null, idx: 0, time: 0, done: {} }; }
+export function startRace(world, raceId) {
+  const r = RACES.find((x) => x.id === raceId); if (!r || !world.player.car) return false;
+  world.race = { active: r, idx: 0, time: 0 };
+  return true;
+}
+export function stepRace(world, dt) {
+  const st = world.race; if (!st || !st.active) return;
+  st.time += dt;
+  const r = st.active; const p = world.player;
+  const cp = r.points[st.idx];
+  if (cp && dist(p.x, p.y, cp[0], cp[1]) < 95) {
+    st.idx += 1; world.events.push({ type: 'checkpoint', idx: st.idx });
+    if (st.idx >= r.points.length) {
+      if (st.time <= r.par) { p.money += r.pay; world.banner = { text: 'RACE WON', sub: '+$' + r.pay + ' — ' + r.name, t: 3.5 }; }
+      else world.banner = { text: 'RACE DONE — OVER PAR', sub: r.name, t: 3 };
+      world.raceDone = world.raceDone || {}; world.raceDone[r.id] = st.time;
+      world.race = createRaceState(); return;
     }
-    const cp = this.currentCheckpoint();
-    if (cp && dist(px, py, cp.x, cp.y) <= 72) {
-      this.index += 1;
-      if (this.index >= this.active.checkpoints.length) {
-        const race = this.active; this.active = null;
-        this.wins[race.id] = (this.wins[race.id] || 0) + 1;
-        return { type: 'race-complete', race, pay: race.pay, elapsed: this.elapsed };
-      }
-      return { type: 'checkpoint', index: this.index, total: this.active.checkpoints.length };
-    }
-    return null;
   }
-
-  cancel() { this.active = null; }
+  if (st.time > r.par * 2.2) { world.banner = { text: 'RACE FAILED', sub: 'Out of time — retry at the flag', t: 3 }; world.race = createRaceState(); }
 }

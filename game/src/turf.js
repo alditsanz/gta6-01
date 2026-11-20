@@ -1,74 +1,48 @@
-// turf.js — turf wars: territory control over named zones.
-// Stand in a rival zone and hold it against waves of crew for a short
-// timer to flip it to your crew. Held zones pay income every in-game
-// hour; holding them all grants a bonus title. State autosaves.
+// Solmar Heat — turf.js
+// Territory control: challenge a rival zone, hold it against the
+// crew, flip its owner, and collect hourly income for zones held.
 
-import { dist } from './config.js';
+import { dist } from './random.js';
 
 export const TURF_ZONES = [
-  { id: 'turf-sunset', name: 'Sunset Mile Turf', x: 260, y: 390, r: 210, owner: 'Vipers' },
-  { id: 'turf-neon', name: 'Neon Strip Turf', x: 1180, y: 260, r: 210, owner: 'Vipers' },
-  { id: 'turf-cactus', name: 'Cactus Court Turf', x: 780, y: 780, r: 200, owner: 'Jackals' },
-  { id: 'turf-downtown', name: 'Downtown Turf', x: 1180, y: 1300, r: 220, owner: 'Jackals' },
-  { id: 'turf-harbor', name: 'Harbor Turf', x: 780, y: 1960, r: 210, owner: 'Cobras' },
-  { id: 'turf-canal', name: 'Canal Row Turf', x: 2000, y: 2000, r: 220, owner: 'Cobras' },
+  { id: 'sunset', name: 'Sunset Mile', x: 600, y: 600, owner: 'Vipers' },
+  { id: 'neon', name: 'Neon Strip', x: 3000, y: 600, owner: 'Harbor Boys' },
+  { id: 'docks', name: 'Pier 9 Docks', x: 3000, y: 3000, owner: 'Harbor Boys' },
+  { id: 'palms', name: 'Palm Heights', x: 600, y: 3000, owner: 'Vipers' },
+  { id: 'downtown', name: 'Downtown', x: 1800, y: 1800, owner: 'Kane Syndicate' },
 ];
-
-export const PLAYER_CREW = 'Solmar Crew';
-export const HOLD_TIME = 20;
-export const INCOME_PER_ZONE = 6; // dollars per in-game hour per zone
-
-export class TurfManager {
-  constructor() {
-    this.zones = TURF_ZONES.map((z) => ({ ...z }));
-    this.challenge = null; // {zone, timeLeft, waves}
-    this.incomeAcc = 0;
-  }
-
-  zoneAt(x, y) {
-    for (const z of this.zones) if (dist(x, y, z.x, z.y) <= z.r) return z;
-    return null;
-  }
-
-  heldCount() { return this.zones.filter((z) => z.owner === PLAYER_CREW).length; }
-  allHeld() { return this.heldCount() === this.zones.length; }
-
-  startChallenge(px, py) {
-    const zone = this.zoneAt(px, py);
-    if (!zone || zone.owner === PLAYER_CREW || this.challenge) return null;
-    this.challenge = { zone, timeLeft: HOLD_TIME, waves: 0 };
-    return this.challenge;
-  }
-
-  // dt seconds held inside the zone; fled=true when the player leaves.
-  update(dt, px, py, alive) {
-    if (!this.challenge) return null;
-    const zone = this.challenge.zone;
-    const inside = dist(px, py, zone.x, zone.y) <= zone.r;
-    if (!alive) { this.challenge = null; return { type: 'turf-lost', zone, reason: 'wasted' }; }
-    if (!inside) { this.challenge = null; return { type: 'turf-lost', zone, reason: 'fled' }; }
-    this.challenge.timeLeft -= dt;
-    this.challenge.waves = Math.floor((HOLD_TIME - this.challenge.timeLeft) / 7);
-    if (this.challenge.timeLeft <= 0) {
-      zone.owner = PLAYER_CREW;
-      this.challenge = null;
-      return { type: 'turf-won', zone, allHeld: this.allHeld() };
+export function createTurf() {
+  return { zones: TURF_ZONES.map((z) => ({ ...z })), challenge: null, incomeTimer: 0 };
+}
+export function zonesHeld(t) { return t.zones.filter((z) => z.owner === 'Rex').length; }
+export function startChallenge(world, zoneId) {
+  const t = world.turf; const z = t.zones.find((x) => x.id === zoneId);
+  if (!z || z.owner === 'Rex' || t.challenge) return false;
+  if (dist(world.player.x, world.player.y, z.x, z.y) > 320) return false;
+  t.challenge = { zoneId, time: 12 };
+  for (let i = 0; i < 3; i++) world.gang.push({ x: z.x + 60 + i * 30, y: z.y + 50, hp: 30, angle: 3, shootCd: 1.4, strafe: 1 });
+  return true;
+}
+export function stepTurf(world, dt) {
+  const t = world.turf; if (!t) return;
+  if (t.challenge) {
+    const z = t.zones.find((x) => x.id === t.challenge.zoneId);
+    if (world.player.dead || dist(world.player.x, world.player.y, z.x, z.y) > 380) {
+      t.challenge = null; world.events.push({ type: 'turfLost' });
+    } else {
+      t.challenge.time -= dt;
+      if (t.challenge.time <= 0) {
+        z.owner = 'Rex'; t.challenge = null;
+        world.events.push({ type: 'turfWon', zone: z.name });
+        world.banner = { text: 'TURF TAKEN', sub: z.name + ' flies your colours', t: 3 };
+        if (zonesHeld(t) === t.zones.length) world.player.rank = 'King of the Mile';
+      }
     }
-    return null;
   }
-
-  // Income tick: call once per in-game hour.
-  incomeForHour() {
-    const amount = this.heldCount() * INCOME_PER_ZONE;
-    this.incomeAcc += amount;
-    return amount;
-  }
-
-  serialize() { return { owners: this.zones.map((z) => z.owner), incomeAcc: this.incomeAcc }; }
-
-  restore(data) {
-    if (!data || !Array.isArray(data.owners)) return;
-    this.zones.forEach((z, i) => { if (data.owners[i]) z.owner = data.owners[i]; });
-    this.incomeAcc = data.incomeAcc || 0;
+  t.incomeTimer += dt;
+  if (t.incomeTimer >= 60) { // one in-game hour tick
+    t.incomeTimer = 0;
+    const pay = zonesHeld(t) * 6;
+    if (pay > 0) { world.player.money += pay; world.turfIncome = pay; }
   }
 }

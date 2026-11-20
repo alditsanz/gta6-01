@@ -1,49 +1,32 @@
-// serve.ts — a tiny static file server for local play-testing.
-// Node standard library only. Serves the game/ directory so the game
-// runs in a desktop browser at the printed address.
-//
-//   node serve.ts        (then open the address it prints)
+// Solmar Heat — serve.ts
+// Tiny local dev server: serves game/ as static files so the game can
+// be played or screenshotted locally. Node standard library only.
+// Usage: node serve.ts --port 8080  →  http://localhost:8080
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, extname, normalize } from 'node:path';
+import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const gameDir = join(rootDir, 'game');
-const port = Number(process.env.PORT || 5173);
+const portArg = process.argv.indexOf('--port');
+const port = portArg >= 0 ? Number(process.argv[portArg + 1]) : 8080;
 
-const TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
+const TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css', '.json': 'application/json', '.jpg': 'image/jpeg',
+  '.png': 'image/png', '.svg': 'image/svg+xml',
 };
 
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
-  let path = decodeURIComponent(url.pathname);
-  if (path === '/') path = '/index.html';
-  const file = normalize(join(gameDir, path));
+  let path = url.pathname === '/' ? '/index.html' : url.pathname;
+  const file = join(gameDir, '.' + decodeURIComponent(path));
   if (!file.startsWith(gameDir) || !existsSync(file) || !statSync(file).isFile()) {
-    res.writeHead(404, { 'content-type': 'text/plain' });
-    res.end('not found');
-    return;
+    res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return;
   }
-  const body = readFileSync(file);
-  res.writeHead(200, {
-    'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream',
-    'content-length': body.length,
-    'cache-control': 'no-store',
-  });
-  res.end(body);
+  res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' });
+  res.end(readFileSync(file));
 });
-
-server.listen(port, () => {
-  console.log(`Solmar Heat is running at http://localhost:${port}/`);
-});
+server.listen(port, () => console.log('Solmar Heat at http://localhost:' + port));

@@ -1,103 +1,83 @@
-// combat.js — shooting, punching, guards and ammo.
-// Bullets are swept along their whole travel each step (segment vs
-// circle), so a fast bullet can never tunnel through a thin target.
+// Solmar Heat — combat.js
+// Pistol with a 12-round mag and reload, punches, gang members who
+// strafe and shoot back, and swept bullet collision so fast bullets
+// cannot tunnel through thin targets.
 
-import { dist } from './config.js';
-import { segmentNearPoint } from './random.js';
+import { dist } from './random.js';
 
-export const MAG_SIZE = 12;
-export const RESERVE_START = 48;
-export const BULLET_SPEED = 880;
-export const BULLET_RANGE = 460;
-export const PUNCH_RANGE = 42;
-export const RELOAD_TIME = 1.1;
-
-export function createCombatState() {
-  return { mag: MAG_SIZE, reserve: RESERVE_START, reloading: 0, cooldown: 0, bullets: [] };
-}
-
-export function startReload(state) {
-  if (state.reloading > 0 || state.mag >= MAG_SIZE || state.reserve <= 0) return false;
-  state.reloading = RELOAD_TIME;
+export function shoot(world, from, angle, friendly) {
+  const p = world.player;
+  if (friendly) {
+    if (p.reloading > 0) return false;
+    if (p.ammo <= 0) { startReload(world); return false; }
+    p.ammo -= 1;
+  }
+  world.bullets.push({
+    x: from.x, y: from.y, px: from.x, py: from.y,
+    vx: Math.cos(angle) * 920, vy: Math.sin(angle) * 920,
+    life: 0.55, friendly: !!friendly, dmg: friendly ? 16 : 7,
+  });
+  world.events.push({ type: 'shot', friendly: !!friendly });
   return true;
 }
-
-export function finishReload(state) {
-  const need = MAG_SIZE - state.mag;
-  const take = Math.min(need, state.reserve);
-  state.mag += take; state.reserve -= take;
-  state.reloading = 0;
-  return take;
+export function startReload(world) {
+  const p = world.player;
+  if (p.reloading > 0 || p.ammo >= 12 || p.reserve <= 0) return false;
+  p.reloading = 1.1; return true;
 }
-
-export function tryShoot(state, x, y, angle) {
-  if (state.reloading > 0 || state.cooldown > 0) return null;
-  if (state.mag <= 0) { startReload(state); return null; }
-  state.mag -= 1;
-  state.cooldown = 0.16;
-  const bullet = {
-    x, y, px: x, py: y,
-    vx: Math.cos(angle) * BULLET_SPEED, vy: Math.sin(angle) * BULLET_SPEED,
-    travelled: 0, alive: true,
-  };
-  state.bullets.push(bullet);
-  return bullet;
+export function punch(world) {
+  const p = world.player;
+  if (p.punchCd > 0 || p.car) return false;
+  p.punchCd = 0.35;
+  world.events.push({ type: 'punch' });
+  for (const g of world.gang) if (dist(p.x, p.y, g.x, g.y) < 42) hurtGang(world, g, 14);
+  for (const ped of world.peds) if (dist(p.x, p.y, ped.x, ped.y) < 40) ped.flee = 1.5;
+  return true;
 }
-
-export function tryPunch(px, py, angle, targets) {
-  const hx = px + Math.cos(angle) * PUNCH_RANGE;
-  const hy = py + Math.sin(angle) * PUNCH_RANGE;
-  for (const t of targets) {
-    if (t.alive !== false && t.health > 0 && dist(hx, hy, t.x, t.y) <= 30) {
-      t.health -= 1;
-      if (t.health <= 0) t.alive = false;
-      return t;
+export function hurtGang(world, g, dmg) {
+  g.hp -= dmg;
+  if (g.hp <= 0 && !g.dead) { g.dead = true; world.player.money += 25; world.events.push({ type: 'gangDown', drop: 25 }); }
+}
+function sweptHit(b, tx, ty, r) {
+  // Check the segment the bullet crossed this step, not just its tip.
+  const steps = 4;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    if (dist(b.px + (b.x - b.px) * t, b.py + (b.y - b.py) * t, tx, ty) < r) return true;
+  }
+  return false;
+}
+export function stepCombat(world, dt) {
+  const p = world.player;
+  p.punchCd = Math.max(0, p.punchCd - dt);
+  if (p.reloading > 0) {
+    p.reloading -= dt;
+    if (p.reloading <= 0) { const take = Math.min(12 - p.ammo, p.reserve); p.ammo += take; p.reserve -= take; }
+  }
+  for (const b of world.bullets) {
+    b.px = b.x; b.py = b.y; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    if (b.friendly) {
+      for (const g of world.gang) if (!g.dead && sweptHit(b, g.x, g.y, 15)) { hurtGang(world, g, b.dmg); b.life = 0; spawnSparks(world, g.x, g.y); }
+      for (const cop of world.cops) if (sweptHit(b, cop.x, cop.y, 14)) { b.life = 0; }
+    } else if (!p.car && sweptHit(b, p.x, p.y, 14)) {
+      p.health -= b.dmg; b.life = 0; spawnSparks(world, p.x, p.y);
+      if (p.health <= 0) { p.health = 0; p.dead = true; }
     }
   }
-  return null;
-}
-
-// Step bullets; targets are {x,y,health,alive,r?}. Returns hit events.
-export function stepBullets(state, dt, targets, isBlocked) {
-  const hits = [];
-  if (state.cooldown > 0) state.cooldown -= dt;
-  if (state.reloading > 0) {
-    state.reloading -= dt;
-    if (state.reloading <= 0) finishReload(state);
+  world.bullets = world.bullets.filter((b) => b.life > 0);
+  for (const g of world.gang) {
+    if (g.dead) continue;
+    const d = dist(g.x, g.y, p.x, p.y);
+    g.x += Math.cos(g.angle + Math.PI / 2) * g.strafe * 26 * dt;
+    if (world.time % 2.4 < dt) g.strafe *= -1;
+    g.shootCd -= dt;
+    if (d < 330 && g.shootCd <= 0) { g.shootCd = 1.15; shoot(world, g, Math.atan2(p.y - g.y, p.x - g.x), false); }
   }
-  for (const b of state.bullets) {
-    if (!b.alive) continue;
-    b.px = b.x; b.py = b.y;
-    b.x += b.vx * dt; b.y += b.vy * dt;
-    b.travelled += BULLET_SPEED * dt;
-    if (b.travelled > BULLET_RANGE) { b.alive = false; continue; }
-    if (isBlocked && isBlocked(b.x, b.y)) { b.alive = false; continue; }
-    for (const t of targets) {
-      if (t.alive === false || t.health <= 0) continue;
-      if (segmentNearPoint(b.px, b.py, b.x, b.y, t.x, t.y, t.r || 16)) {
-        t.health -= 1;
-        if (t.health <= 0) t.alive = false;
-        b.alive = false;
-        hits.push({ target: t, killed: t.alive === false });
-        break;
-      }
-    }
-  }
-  state.bullets = state.bullets.filter((b) => b.alive);
-  return hits;
+  world.gang = world.gang.filter((g) => !g.dead);
+  for (const pt of world.particles) { pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.life -= dt; }
+  world.particles = world.particles.filter((pt) => pt.life > 0);
 }
-
-export function createAmmoPickup(x, y) {
-  return { x, y, amount: 24, taken: false, kind: 'ammo' };
+export function spawnSparks(world, x, y) {
+  for (let i = 0; i < 5; i++) world.particles.push({ x, y, vx: (Math.random() - 0.5) * 130, vy: (Math.random() - 0.5) * 130, life: 0.3, color: '#ffd76b' });
 }
-
-export function checkAmmoPickup(pickups, state, x, y) {
-  for (const p of pickups) {
-    if (!p.taken && dist(x, y, p.x, p.y) <= 30) {
-      p.taken = true;
-      state.reserve += p.amount;
-      return p;
-    }
-  }
-  return null;
-}
+export function gangHealthPips(g) { return Math.max(0, Math.ceil(g.hp / 10)); }

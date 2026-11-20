@@ -1,99 +1,50 @@
-// config.js — Solmar Heat: every shared constant lives here.
-// World geometry, road grid, districts, ranks, car models and tuning.
+// Solmar Heat — config.js
+// Every tuning constant for the city lives here so the other modules
+// stay free of magic numbers. Round 12 fresh build.
 
-export const WORLD_SIZE = 2440;
-export const GRID_ROADS = 9;
-export const ROAD_WIDTH = 92;
-export const ROAD_CENTERS = [140, 400, 660, 920, 1180, 1440, 1700, 1960, 2220];
-export const BLOCK_SIZE = 260;
+export const WORLD_SIZE = 3600;
+export const GRID = 9;                 // 9x9 street grid
+export const BLOCK = 400;              // distance between avenues
+export const ROAD_W = 92;              // road width in world units
+export const SIDEWALK = 14;
 
-export const CANVAS_W = 1280;
-export const CANVAS_H = 720;
+export const PLAYER = {
+  radius: 13,
+  walkSpeed: 168,
+  sprintSpeed: 252,
+  health: 100,
+  safehouse: { x: 420, y: 420 },
+};
 
-export const PLAYER_SPEED = 168;
-export const PLAYER_SPRINT = 248;
-export const PLAYER_RADIUS = 13;
-export const PLAYER_MAX_HEALTH = 100;
+export const WANTED = {
+  maxStars: 5,
+  band: 100,                 // heat points per star
+  decayDelay: 26,            // clean seconds before one star cools
+  bustTime: 1.6,             // seconds a foot cop must hold to bust
+  finePerStar: 40,
+  fineCap: 200,
+};
 
-// 600, not 500: the 5-star band is 500-599, so a fresh 5th star can
-// land mid-band at 550 and decay cannot remove it on the next frame.
-export const HEAT_MAX = 600;
-export const HEAT_PER_STAR = 100;
-// A fresh star must land mid-band so decay cannot remove it next frame.
-export const HEAT_MID_BAND = 50;
+export const CAR_TYPES = [
+  { id: 'sedan',  name: 'Solmar Sedan',  top: 305, accel: 150, grip: 3.4, len: 46, wid: 22, hp: 100, color: '#7fb2d9' },
+  { id: 'coupe',  name: 'Coupe GT',      top: 385, accel: 205, grip: 3.9, len: 44, wid: 21, hp: 95,  color: '#d97f9e' },
+  { id: 'sports', name: 'Falco S',       top: 470, accel: 265, grip: 4.4, len: 45, wid: 21, hp: 90,  color: '#e8b13c' },
+  { id: 'taxi',   name: 'Vento Taxi',    top: 320, accel: 160, grip: 3.5, len: 47, wid: 22, hp: 105, color: '#f2c230' },
+  { id: 'vento',  name: 'Vento',         top: 340, accel: 175, grip: 3.6, len: 47, wid: 22, hp: 110, color: '#c0272d' },
+  { id: 'van',    name: 'Harbor Van',    top: 265, accel: 125, grip: 3.0, len: 54, wid: 25, hp: 130, color: '#b9c4c9' },
+  { id: 'truck',  name: 'Dock Truck',    top: 240, accel: 105, grip: 2.7, len: 62, wid: 27, hp: 150, color: '#8a97a3' },
+  { id: 'pickup', name: 'Dune Pickup',   top: 330, accel: 170, grip: 3.3, len: 50, wid: 24, hp: 120, color: '#6fae6a' },
+  { id: 'muscle', name: 'Marlin Muscle', top: 430, accel: 240, grip: 3.8, len: 48, wid: 23, hp: 100, color: '#7a4fd0' },
+  { id: 'compact',name: 'Pico Compact',  top: 285, accel: 145, grip: 3.6, len: 40, wid: 20, hp: 85,  color: '#4fc4b5' },
+  { id: 'limo',   name: 'Regal Limo',    top: 300, accel: 135, grip: 3.1, len: 66, wid: 25, hp: 125, color: '#2e3440' },
+  { id: 'police', name: 'SCPD Cruiser',  top: 445, accel: 250, grip: 4.2, len: 48, wid: 22, hp: 140, color: '#eef2f5' },
+];
 
-export const COIN_VALUE = 75;
-export const COIN_TOTAL = 10;
-export const NEAR_MISS_VALUE = 15;
-export const NEAR_MISS_MIN_SPEED = 150;
-export const NEAR_MISS_COOLDOWN = 1.5;
-export const WALL_HIT_DAMAGE = 8;
+export const COLORS = {
+  sky: '#ffd9a0', road: '#3c4148', roadEdge: '#565d66',
+  sidewalk: '#cbb99b', grass: '#79b657', sand: '#eed9a4',
+  water: '#3d9db8', gold: '#f5c542', red: '#e23b3b',
+};
 
 export const SAVE_KEY = 'solmar-heat-save-v1';
-
-// Districts are rectangles over the grid; the first match wins, so the
-// more specific zones (Canal Row, Marina, Pier 9) come first.
-export const DISTRICTS = [
-  { name: 'Canal Row', x: 1560, y: 1560, w: 880, h: 880 },
-  { name: 'Marina', x: 1560, y: 1040, w: 880, h: 520 },
-  { name: 'Pier 9', x: 1900, y: 0, w: 540, h: 520 },
-  { name: 'Neon Strip', x: 520, y: 0, w: 1040, h: 520 },
-  { name: 'Sunset Mile', x: 0, y: 0, w: 520, h: 780 },
-  { name: 'Cactus Court', x: 520, y: 520, w: 520, h: 520 },
-  { name: 'Palm Heights', x: 1040, y: 520, w: 520, h: 520 },
-  { name: 'Downtown Solmar', x: 520, y: 1040, w: 1040, h: 520 },
-  { name: 'Old Market', x: 0, y: 780, w: 520, h: 780 },
-  { name: 'Harbor View', x: 0, y: 1560, w: 1560, h: 880 },
-];
-
-export function districtAt(x, y) {
-  for (const d of DISTRICTS) {
-    if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d.name;
-  }
-  return 'Downtown Solmar';
-}
-
-export const RANKS = [
-  'Lookout',
-  'Runner',
-  'Wheelman',
-  'Hustler',
-  'King of the Mile',
-  'Street Royalty',
-  'Solmar Legend',
-];
-
-export function rankFor(score, storyComplete) {
-  if (storyComplete) return RANKS[6];
-  if (score >= 6000) return RANKS[5];
-  if (score >= 4200) return RANKS[4];
-  if (score >= 2600) return RANKS[3];
-  if (score >= 1400) return RANKS[2];
-  if (score >= 500) return RANKS[1];
-  return RANKS[0];
-}
-
-// Twelve stealable models. speed is top speed in units/second.
-export const CAR_MODELS = [
-  { model: 'Falco', color: '#e8452c', speed: 342, accel: 210, grip: 0.92 },
-  { model: 'Vento Taxi', color: '#f2b01e', speed: 292, accel: 175, grip: 0.9 },
-  { model: 'Marlin', color: '#2c7be8', speed: 318, accel: 195, grip: 0.91 },
-  { model: 'Dune Bug', color: '#7ac74f', speed: 268, accel: 185, grip: 0.86 },
-  { model: 'Corsair', color: '#8e44ad', speed: 356, accel: 225, grip: 0.93 },
-  { model: 'Pickup Ox', color: '#95a5a6', speed: 258, accel: 160, grip: 0.85 },
-  { model: 'Sol Coupe', color: '#ecf0f1', speed: 332, accel: 205, grip: 0.92 },
-  { model: 'Nightline', color: '#2c3e50', speed: 348, accel: 218, grip: 0.94 },
-  { model: 'Canal Skiff', color: '#16a085', speed: 302, accel: 188, grip: 0.9 },
-  { model: 'Ember GT', color: '#d35400', speed: 368, accel: 232, grip: 0.93 },
-  { model: 'Harbor Van', color: '#bdc3c7', speed: 248, accel: 150, grip: 0.84 },
-  { model: 'Viperette', color: '#c0392b', speed: 378, accel: 240, grip: 0.95 },
-];
-
-export const POLICE_SPEED = 322;
-export const HELI_SPEED = 398;
-export const TRAFFIC_BASE_COUNT = 14;
-export const PEDESTRIAN_COUNT = 26;
-
-export function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
-export function dist(ax, ay, bx, by) { const dx = bx - ax, dy = by - ay; return Math.sqrt(dx * dx + dy * dy); }
-export function starsForHeat(heat) { return Math.max(0, Math.min(5, Math.floor(heat / HEAT_PER_STAR))); }
+export const DAY_LENGTH = 300; // seconds per in-game day

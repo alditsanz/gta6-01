@@ -1,77 +1,46 @@
-// weather.js — day/night clock, sky phases, weather and rush hour.
-// One full in-game day lasts a few real minutes. Weather (clear, rain,
-// fog) rolls on a timer; rain cuts car grip, fog shortens view range.
-// Rush hour is a pure function of the clock hour, so it is testable.
+// Solmar Heat — weather.js
+// Day/night clock plus rolling weather. Rain trims car grip, fog
+// shortens the visible range, and rush hour follows the clock.
 
-export const DAY_LENGTH_SECONDS = 300; // 5 real minutes per in-game day
-export const WEATHERS = ['clear', 'rain', 'fog'];
+import { DAY_LENGTH } from './config.js';
 
-export function phaseForHour(hour) {
-  if (hour >= 5 && hour < 7) return 'dawn';
-  if (hour >= 7 && hour < 17) return 'day';
-  if (hour >= 17 && hour < 20) return 'dusk';
+export function createWeather() {
+  return { clock: 17.2, kind: 'clear', timer: 55, rain: [], fogAlpha: 0 };
+}
+export function hourOf(w) { return w.clock % 24; }
+export function skyPhase(clock) {
+  const h = clock % 24;
+  if (h >= 6 && h < 11) return 'morning';
+  if (h >= 11 && h < 16.5) return 'day';
+  if (h >= 16.5 && h < 19.5) return 'golden';
+  if (h >= 19.5 && h < 21.5) return 'dusk';
   return 'night';
 }
-
-export const SKY_COLORS = {
-  dawn: '#f7b267', day: '#87ceeb', dusk: '#f4845f', night: '#16213a',
-};
-
-export function skyColorForHour(hour) { return SKY_COLORS[phaseForHour(hour)]; }
-export function streetlightsOn(hour) { const p = phaseForHour(hour); return p === 'night' || p === 'dusk' || p === 'dawn'; }
-export function darknessForHour(hour) {
-  const p = phaseForHour(hour);
-  return p === 'night' ? 0.55 : p === 'dusk' ? 0.28 : p === 'dawn' ? 0.18 : 0;
-}
-
-// Rush hour: peaks at 07-09 and 17-19 (2x), quiet at 00-05 (0.5x).
-export function rushHourDensity(hour) {
+export function isNight(clock) { const p = skyPhase(clock); return p === 'night' || p === 'dusk'; }
+export function gripFactor(w) { return w.kind === 'rain' ? 0.72 : 1; }
+export function viewRange(w) { return w.kind === 'fog' ? 520 : 1400; }
+export function rushDensity(hour) {
   if ((hour >= 7 && hour < 9) || (hour >= 17 && hour < 19)) return 2;
   if (hour >= 0 && hour < 5) return 0.5;
   return 1;
 }
-
-export function gripForWeather(weather) { return weather === 'rain' ? 0.82 : 1; }
-export function viewRangeForWeather(weather) { return weather === 'fog' ? 420 : 950; }
-
-export class WeatherSystem {
-  constructor(rng) {
-    this.rng = rng || Math.random;
-    this.minutes = 10 * 60; // start at 10:00
-    this.weather = 'clear';
-    this.weatherTimer = 55; // seconds until the weather may change
-    this.lastHour = 10;
-    this.hourChanged = false;
+export function formatClock(clock) {
+  const h = Math.floor(clock % 24), m = Math.floor(((clock % 24) - h) * 60);
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+export function stepWeather(w, dt, rng) {
+  w.clock = (w.clock + (dt * 24) / DAY_LENGTH) % 24;
+  w.timer -= dt;
+  if (w.timer <= 0) {
+    w.timer = 45 + rng() * 40;
+    const roll = rng();
+    w.kind = roll < 0.62 ? 'clear' : roll < 0.84 ? 'rain' : 'fog';
   }
-
-  hour() { return Math.floor(this.minutes / 60) % 24; }
-  minuteOfHour() { return Math.floor(this.minutes % 60); }
-
-  clockText() {
-    const h = String(this.hour()).padStart(2, '0');
-    const m = String(this.minuteOfHour()).padStart(2, '0');
-    return h + ':' + m;
+  w.fogAlpha += ((w.kind === 'fog' ? 0.35 : 0) - w.fogAlpha) * Math.min(1, dt * 0.8);
+  if (w.kind === 'rain' && w.rain.length < 90) {
+    for (let i = 0; i < 4; i++) w.rain.push({ x: Math.random() * 1280, y: -10, s: 620 + Math.random() * 260 });
   }
-
-  phase() { return phaseForHour(this.hour()); }
-  density() { return rushHourDensity(this.hour()); }
-  grip() { return gripForWeather(this.weather); }
-  viewRange() { return viewRangeForWeather(this.weather); }
-
-  update(dt) {
-    const prevHour = this.hour();
-    this.minutes += (dt / DAY_LENGTH_SECONDS) * 24 * 60;
-    if (this.minutes >= 24 * 60) this.minutes -= 24 * 60;
-    this.hourChanged = this.hour() !== prevHour;
-    this.weatherTimer -= dt;
-    if (this.weatherTimer <= 0) {
-      this.weatherTimer = 45 + this.rng() * 40;
-      const roll = this.rng();
-      this.weather = roll < 0.55 ? 'clear' : (roll < 0.8 ? 'rain' : 'fog');
-    }
-    return this.hourChanged;
-  }
-
-  setWeather(w) { if (WEATHERS.includes(w)) this.weather = w; }
-  setHour(h) { this.minutes = (h % 24) * 60 + (this.minutes % 60); }
+  for (const r of w.rain) { r.y += r.s * dt; r.x += 90 * dt; }
+  w.rain = w.rain.filter((r) => r.y < 760);
+  return w;
 }
