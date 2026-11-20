@@ -1,110 +1,74 @@
-// Solmar Heat — turf.js
-// Turf wars: five named zones, each held by a rival crew. Stand in a rival
-// zone, survive the hold timer while crew members come at you, and the zone
-// flips to your crew. Held zones pay $5 per in-game hour each; holding all
-// five pays a $500 bonus and a title. State persists in the autosave.
+// turf.js — turf wars: territory control over named zones.
+// Stand in a rival zone and hold it against waves of crew for a short
+// timer to flip it to your crew. Held zones pay income every in-game
+// hour; holding them all grants a bonus title. State autosaves.
 
-import { TURF_ZONES, TURF_HOLD_SECONDS, TURF_INCOME_PER_HOUR, TURF_ALL_BONUS } from './config.js';
+import { dist } from './config.js';
 
-/** Fresh turf state: every zone owned by its rival crew. */
-export function createTurf() {
-  return {
-    owners: Object.fromEntries(TURF_ZONES.map((z) => [z.id, z.crew])),
-    challenge: null, // {zoneId, timer, spawned}
-    incomeEarned: 0,
-    allBonusPaid: false,
-  };
-}
+export const TURF_ZONES = [
+  { id: 'turf-sunset', name: 'Sunset Mile Turf', x: 260, y: 390, r: 210, owner: 'Vipers' },
+  { id: 'turf-neon', name: 'Neon Strip Turf', x: 1180, y: 260, r: 210, owner: 'Vipers' },
+  { id: 'turf-cactus', name: 'Cactus Court Turf', x: 780, y: 780, r: 200, owner: 'Jackals' },
+  { id: 'turf-downtown', name: 'Downtown Turf', x: 1180, y: 1300, r: 220, owner: 'Jackals' },
+  { id: 'turf-harbor', name: 'Harbor Turf', x: 780, y: 1960, r: 210, owner: 'Cobras' },
+  { id: 'turf-canal', name: 'Canal Row Turf', x: 2000, y: 2000, r: 220, owner: 'Cobras' },
+];
 
-/** The zone a point sits in, or null. */
-export function zoneAt(x, y) {
-  return TURF_ZONES.find((z) => x >= z.x0 && x < z.x1 && y >= z.y0 && y < z.y1) || null;
-}
+export const PLAYER_CREW = 'Solmar Crew';
+export const HOLD_TIME = 20;
+export const INCOME_PER_ZONE = 6; // dollars per in-game hour per zone
 
-/** How many zones the player holds. */
-export function zonesHeld(state) {
-  return TURF_ZONES.filter((z) => state.owners[z.id] === 'You').length;
-}
-
-/** Is every zone the player's? */
-export function allZonesHeld(state) {
-  return zonesHeld(state) === TURF_ZONES.length;
-}
-
-/**
- * Start challenging a rival zone. Returns the challenge or null
- * (null when the zone is already yours or a challenge is running).
- */
-export function startChallenge(state, zoneId) {
-  const zone = TURF_ZONES.find((z) => z.id === zoneId);
-  if (!zone || state.challenge) return null;
-  if (state.owners[zoneId] === 'You') return null;
-  state.challenge = { zoneId, timer: TURF_HOLD_SECONDS, spawned: 0 };
-  return state.challenge;
-}
-
-/**
- * Advance a challenge by dt. `inside` says whether the player is still in
- * the zone, `wasted` whether the player just died. Returns events:
- * [{type: 'rival'|'flipped'|'fled'|'lost', zone, count?}]
- */
-export function tickChallenge(state, dt, inside, wasted) {
-  const events = [];
-  const c = state.challenge;
-  if (!c) return events;
-  if (wasted) {
-    state.challenge = null;
-    events.push({ type: 'lost', zone: TURF_ZONES.find((z) => z.id === c.zoneId) });
-    return events;
+export class TurfManager {
+  constructor() {
+    this.zones = TURF_ZONES.map((z) => ({ ...z }));
+    this.challenge = null; // {zone, timeLeft, waves}
+    this.incomeAcc = 0;
   }
-  if (!inside) {
-    state.challenge = null;
-    events.push({ type: 'fled', zone: TURF_ZONES.find((z) => z.id === c.zoneId) });
-    return events;
+
+  zoneAt(x, y) {
+    for (const z of this.zones) if (dist(x, y, z.x, z.y) <= z.r) return z;
+    return null;
   }
-  c.timer -= dt;
-  // A rival crew member shows up every ~8 seconds of the hold.
-  const want = Math.floor((TURF_HOLD_SECONDS - c.timer) / 8);
-  while (c.spawned < want) {
-    c.spawned++;
-    events.push({ type: 'rival', zone: TURF_ZONES.find((z) => z.id === c.zoneId), count: c.spawned });
+
+  heldCount() { return this.zones.filter((z) => z.owner === PLAYER_CREW).length; }
+  allHeld() { return this.heldCount() === this.zones.length; }
+
+  startChallenge(px, py) {
+    const zone = this.zoneAt(px, py);
+    if (!zone || zone.owner === PLAYER_CREW || this.challenge) return null;
+    this.challenge = { zone, timeLeft: HOLD_TIME, waves: 0 };
+    return this.challenge;
   }
-  if (c.timer <= 0) {
-    state.owners[c.zoneId] = 'You';
-    state.challenge = null;
-    const zone = TURF_ZONES.find((z) => z.id === c.zoneId);
-    events.push({ type: 'flipped', zone });
-    if (allZonesHeld(state) && !state.allBonusPaid) {
-      state.allBonusPaid = true;
-      events.push({ type: 'all-held', amount: TURF_ALL_BONUS });
+
+  // dt seconds held inside the zone; fled=true when the player leaves.
+  update(dt, px, py, alive) {
+    if (!this.challenge) return null;
+    const zone = this.challenge.zone;
+    const inside = dist(px, py, zone.x, zone.y) <= zone.r;
+    if (!alive) { this.challenge = null; return { type: 'turf-lost', zone, reason: 'wasted' }; }
+    if (!inside) { this.challenge = null; return { type: 'turf-lost', zone, reason: 'fled' }; }
+    this.challenge.timeLeft -= dt;
+    this.challenge.waves = Math.floor((HOLD_TIME - this.challenge.timeLeft) / 7);
+    if (this.challenge.timeLeft <= 0) {
+      zone.owner = PLAYER_CREW;
+      this.challenge = null;
+      return { type: 'turf-won', zone, allHeld: this.allHeld() };
     }
+    return null;
   }
-  return events;
-}
 
-/**
- * Turf income for a stretch of in-game hours. Returns the dollars earned
- * (also added to incomeEarned).
- */
-export function turfIncome(state, hours) {
-  const amount = zonesHeld(state) * TURF_INCOME_PER_HOUR * hours;
-  state.incomeEarned += amount;
-  return amount;
-}
-
-/** Serialise turf owners for the save file. */
-export function turfSave(state) {
-  return { owners: state.owners, incomeEarned: state.incomeEarned, allBonusPaid: state.allBonusPaid };
-}
-
-/** Restore turf owners from a save file. */
-export function turfLoad(state, saved) {
-  if (!saved || typeof saved !== 'object') return;
-  if (saved.owners) {
-    for (const z of TURF_ZONES) {
-      if (typeof saved.owners[z.id] === 'string') state.owners[z.id] = saved.owners[z.id];
-    }
+  // Income tick: call once per in-game hour.
+  incomeForHour() {
+    const amount = this.heldCount() * INCOME_PER_ZONE;
+    this.incomeAcc += amount;
+    return amount;
   }
-  if (typeof saved.incomeEarned === 'number') state.incomeEarned = saved.incomeEarned;
-  if (saved.allBonusPaid) state.allBonusPaid = true;
+
+  serialize() { return { owners: this.zones.map((z) => z.owner), incomeAcc: this.incomeAcc }; }
+
+  restore(data) {
+    if (!data || !Array.isArray(data.owners)) return;
+    this.zones.forEach((z, i) => { if (data.owners[i]) z.owner = data.owners[i]; });
+    this.incomeAcc = data.incomeAcc || 0;
+  }
 }

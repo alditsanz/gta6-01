@@ -1,118 +1,81 @@
-// Solmar Heat — sidejobs.js
-// The side work: taxi fares, the Canal Row package delivery, and the
-// near-miss bonus. Pure state machines; main.js feeds them the player
-// position and the clock.
+// sidejobs.js — taxi fares and the Canal Row delivery job.
+// Fares: press T near a waiting passenger, drive them to their
+// destination, get paid about $310. Deliveries: pick up a package and
+// run it across the map against a timer; police eyes raise heat faster.
 
-import { mulberry32, range, pick } from './random.js';
-import { roadPos, districtAt } from './config.js';
-import { NEAR_MISS_PAY, NEAR_MISS_COOLDOWN, NEAR_MISS_SPEED } from './config.js';
+import { dist } from './config.js';
+import { LANDMARKS } from './landmarks.js';
 
-export const FARE_PAY = 310; // a taxi fare pays around $310
-export const FARE_TIME = 75; // seconds to reach the destination
-export const DELIVERY_PAY = 450;
-export const DELIVERY_TIME = 100;
+export const FARE_PAY = 310;
+export const FARE_TIME = 95;
+export const DELIVERY_PAY = 420;
+export const DELIVERY_TIME = 110;
 
-/** Fresh side-job state. */
-export function createSideJobs(seed = 777) {
-  return {
-    rng: mulberry32(seed),
-    fare: null, // {px, py, dx, dy, timer, pickedUp}
-    fareDone: 0,
-    delivery: null, // {px, py, dx, dy, timer, pickedUp, spotted}
-    deliveryDone: 0,
-    nearMissTimer: 0,
-    nearMisses: 0,
-  };
-}
-
-/** A random point on a road, for fares and deliveries. */
-export function roadPoint(rng) {
-  const horizontal = rng() < 0.5;
-  const road = Math.floor(rng() * 9);
-  const along = range(rng, 200, 2240);
-  return horizontal ? { x: along, y: roadPos(road) } : { x: roadPos(road), y: along };
-}
-
-/** Offer a new taxi fare somewhere in the city. */
-export function offerFare(state) {
-  if (state.fare) return null;
-  const p = roadPoint(state.rng);
-  const d = roadPoint(state.rng);
-  state.fare = { px: p.x, py: p.y, dx: d.x, dy: d.y, timer: FARE_TIME, pickedUp: false };
-  return state.fare;
-}
-
-/** Offer a new package delivery (starts in Canal Row). */
-export function offerDelivery(state) {
-  if (state.delivery) return null;
-  const p = { x: range(state.rng, 900, 1500), y: range(state.rng, 1700, 2100) };
-  const d = roadPoint(state.rng);
-  state.delivery = { px: p.x, py: p.y, dx: d.x, dy: d.y, timer: DELIVERY_TIME, pickedUp: false, spotted: false };
-  return state.delivery;
-}
-
-/**
- * Advance fares/delivery by dt. `near` is a function (x, y) => boolean
- * saying whether the player is close to a point. Returns events:
- * [{type: 'fare-paid'|'fare-failed'|'delivery-paid'|'delivery-failed'|'delivery-spotted', amount?}]
- */
-export function tickSideJobs(state, dt, near, wantedStars, allowPickup = false) {
-  const events = [];
-  if (state.nearMissTimer > 0) state.nearMissTimer -= dt;
-
-  const f = state.fare;
-  if (f) {
-    f.timer -= dt;
-    if (!f.pickedUp && allowPickup && near(f.px, f.py, 46)) {
-      f.pickedUp = true;
-      f.timer = FARE_TIME;
-    } else if (f.pickedUp && near(f.dx, f.dy, 52)) {
-      state.fare = null;
-      state.fareDone++;
-      events.push({ type: 'fare-paid', amount: FARE_PAY, district: districtAt(f.dx, f.dy) });
-    } else if (f.timer <= 0) {
-      state.fare = null;
-      events.push({ type: 'fare-failed' });
-    }
+export class SideJobs {
+  constructor(rng) {
+    this.rng = rng;
+    this.fare = null;        // {x,y,phase:'wait'|'ride',dest,timeLeft}
+    this.faresDone = 0;
+    this.delivery = null;    // {x,y,phase:'pickup'|'run',dest,timeLeft}
+    this.deliveriesDone = 0;
+    this.spottedHeatRate = 26; // extra heat per second while spotted on a run
   }
 
-  const d = state.delivery;
-  if (d) {
-    d.timer -= dt;
-    if (!d.pickedUp && allowPickup && near(d.px, d.py, 46)) {
-      d.pickedUp = true;
-      d.timer = DELIVERY_TIME;
-    } else if (d.pickedUp && near(d.dx, d.dy, 52)) {
-      state.delivery = null;
-      state.deliveryDone++;
-      events.push({ type: 'delivery-paid', amount: DELIVERY_PAY });
-    } else if (d.timer <= 0) {
-      state.delivery = null;
-      events.push({ type: 'delivery-failed' });
-    }
-    // Getting spotted by police mid-delivery raises heat faster.
-    if (d.pickedUp && !d.spotted && wantedStars >= 2) {
-      d.spotted = true;
-      events.push({ type: 'delivery-spotted' });
-    }
+  spawnFare() {
+    const lm = LANDMARKS[Math.floor(this.rng() * LANDMARKS.length)];
+    let dest = LANDMARKS[Math.floor(this.rng() * LANDMARKS.length)];
+    if (dest.id === lm.id) dest = LANDMARKS[(LANDMARKS.indexOf(dest) + 3) % LANDMARKS.length];
+    this.fare = { x: lm.x + 40, y: lm.y + 40, phase: 'wait', dest, timeLeft: 0, pay: FARE_PAY };
+    return this.fare;
   }
-  return events;
-}
 
-/**
- * Near-miss check: the player is driving fast and a traffic car passes
- * close by without touching. Returns the payout ($15) or 0.
- */
-export function checkNearMiss(state, speed, closestGap) {
-  if (state.nearMissTimer > 0) return 0;
-  if (speed < NEAR_MISS_SPEED) return 0;
-  if (closestGap > 34 || closestGap < 6) return 0; // too far, or a crash
-  state.nearMissTimer = NEAR_MISS_COOLDOWN;
-  state.nearMisses++;
-  return NEAR_MISS_PAY;
-}
+  // Press T near a waiting fare while in a car starts the ride.
+  tryPickupFare(px, py, inCar) {
+    if (!this.fare || this.fare.phase !== 'wait' || !inCar) return false;
+    if (dist(px, py, this.fare.x, this.fare.y) > 64) return false;
+    this.fare.phase = 'ride';
+    this.fare.timeLeft = FARE_TIME;
+    return true;
+  }
 
-/** A short list of passenger names for the fare banner. */
-export function passengerName(rng) {
-  return pick(rng, ['Mara', 'Dino', 'Sofia', 'Rex', 'Iris', 'Kiko', 'Tomas', 'Lena']);
+  updateFare(dt, px, py) {
+    if (!this.fare || this.fare.phase !== 'ride') return null;
+    this.fare.timeLeft -= dt;
+    if (this.fare.timeLeft <= 0) { this.fare = null; return { type: 'fare-failed' }; }
+    if (dist(px, py, this.fare.dest.x, this.fare.dest.y) <= 78) {
+      const pay = this.fare.pay;
+      this.fare = null; this.faresDone += 1;
+      return { type: 'fare-complete', pay };
+    }
+    return null;
+  }
+
+  startDelivery() {
+    const from = LANDMARKS.find((l) => l.id === 'canal-market');
+    const to = LANDMARKS.find((l) => l.id === 'depot');
+    this.delivery = { x: from.x + 34, y: from.y - 30, phase: 'pickup', dest: to, timeLeft: 0, pay: DELIVERY_PAY };
+    return this.delivery;
+  }
+
+  tryPickupPackage(px, py) {
+    if (!this.delivery || this.delivery.phase !== 'pickup') return false;
+    if (dist(px, py, this.delivery.x, this.delivery.y) > 60) return false;
+    this.delivery.phase = 'run';
+    this.delivery.timeLeft = DELIVERY_TIME;
+    return true;
+  }
+
+  // spotted: a police unit can see the player this frame.
+  updateDelivery(dt, px, py, spotted) {
+    if (!this.delivery || this.delivery.phase !== 'run') return null;
+    this.delivery.timeLeft -= dt;
+    if (this.delivery.timeLeft <= 0) { this.delivery = null; return { type: 'delivery-failed' }; }
+    const heat = spotted ? this.spottedHeatRate * dt : 0;
+    if (dist(px, py, this.delivery.dest.x, this.delivery.dest.y) <= 78) {
+      const pay = this.delivery.pay;
+      this.delivery = null; this.deliveriesDone += 1;
+      return { type: 'delivery-complete', pay, heat };
+    }
+    return { type: 'delivery-tick', heat };
+  }
 }

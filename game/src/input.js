@@ -1,82 +1,61 @@
-// Solmar Heat — input.js
-// Keyboard + mouse state. The class only touches the DOM when attach() is
-// called by main.js, so importing this module in Node is safe.
+// input.js — keyboard + mouse state for the game.
+// Keys are stored by code (KeyW, ArrowUp, ...) with edge detection so a
+// single press can trigger steal / fare / pause exactly once.
 
 export class Input {
   constructor() {
-    this.keys = new Set(); // currently held key codes (lowercase)
-    this.pressed = new Set(); // keys pressed since the last consume()
+    this.keys = new Set();
+    this.pressed = new Set();
     this.mouseX = 0;
     this.mouseY = 0;
     this.mouseDown = false;
-    this.clicked = false; // a mouse click since the last consume()
-    this._onKeyDown = null;
-    this._onKeyUp = null;
-    this._onMouseMove = null;
-    this._onMouseDown = null;
-    this._onMouseUp = null;
-    this._onBlur = null;
-  }
-
-  attach(canvas) {
-    this._onKeyDown = (e) => {
-      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-      if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
-      if (!e.repeat) this.pressed.add(k);
-      this.keys.add(k);
-    };
-    this._onKeyUp = (e) => {
-      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-      this.keys.delete(k);
-    };
-    this._onMouseMove = (e) => {
-      const r = canvas.getBoundingClientRect();
-      this.mouseX = e.clientX - r.left;
-      this.mouseY = e.clientY - r.top;
-    };
-    this._onMouseDown = (e) => {
-      this.mouseDown = true;
-      this.clicked = true;
-      const r = canvas.getBoundingClientRect();
-      this.mouseX = e.clientX - r.left;
-      this.mouseY = e.clientY - r.top;
-    };
-    this._onMouseUp = () => { this.mouseDown = false; };
-    this._onBlur = () => { this.keys.clear(); this.mouseDown = false; };
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup', this._onKeyUp);
-    window.addEventListener('blur', this._onBlur);
-    canvas.addEventListener('mousemove', this._onMouseMove);
-    canvas.addEventListener('mousedown', this._onMouseDown);
-    window.addEventListener('mouseup', this._onMouseUp);
-  }
-
-  /** Is any of these keys held right now? */
-  down(...names) {
-    return names.some((n) => this.keys.has(n));
-  }
-
-  /** Was any of these keys pressed since the last consume()? */
-  wasPressed(...names) {
-    return names.some((n) => this.pressed.has(n));
-  }
-
-  /** Was the mouse clicked since the last consume()? */
-  wasClicked() {
-    return this.clicked;
-  }
-
-  /** Clear the edge-triggered state (call once per frame, after handling). */
-  consume() {
-    this.pressed.clear();
     this.clicked = false;
+    this._target = null;
+    this._onKeyDown = (e) => {
+      if (!this.keys.has(e.code)) this.pressed.add(e.code);
+      this.keys.add(e.code);
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    };
+    this._onKeyUp = (e) => { this.keys.delete(e.code); };
+    this._onMouseMove = (e) => {
+      const r = this._target && this._target.getBoundingClientRect ? this._target.getBoundingClientRect() : null;
+      this.mouseX = r ? e.clientX - r.left : e.clientX;
+      this.mouseY = r ? e.clientY - r.top : e.clientY;
+    };
+    this._onMouseDown = () => { this.mouseDown = true; this.clicked = true; };
+    this._onMouseUp = () => { this.mouseDown = false; };
   }
 
-  detach() {
-    if (!this._onKeyDown) return;
-    window.removeEventListener('keydown', this._onKeyDown);
-    window.removeEventListener('keyup', this._onKeyUp);
-    window.removeEventListener('blur', this._onBlur);
-    window.removeEventListener('mouseup', this._onMouseUp);
+  attach(target, win) {
+    this._target = target;
+    win.addEventListener('keydown', this._onKeyDown);
+    win.addEventListener('keyup', this._onKeyUp);
+    target.addEventListener('mousemove', this._onMouseMove);
+    target.addEventListener('mousedown', this._onMouseDown);
+    win.addEventListener('mouseup', this._onMouseUp);
   }
+
+  detach(win) {
+    win.removeEventListener('keydown', this._onKeyDown);
+    win.removeEventListener('keyup', this._onKeyUp);
+    if (this._target) {
+      this._target.removeEventListener('mousemove', this._onMouseMove);
+      this._target.removeEventListener('mousedown', this._onMouseDown);
+    }
+    win.removeEventListener('mouseup', this._onMouseUp);
+  }
+
+  down(...codes) { return codes.some((c) => this.keys.has(c)); }
+  justPressed(...codes) { return codes.some((c) => this.pressed.has(c)); }
+
+  moveAxis() {
+    let x = 0, y = 0;
+    if (this.down('KeyA', 'ArrowLeft')) x -= 1;
+    if (this.down('KeyD', 'ArrowRight')) x += 1;
+    if (this.down('KeyW', 'ArrowUp')) y -= 1;
+    if (this.down('KeyS', 'ArrowDown')) y += 1;
+    return { x, y };
+  }
+
+  endFrame() { this.pressed.clear(); this.clicked = false; }
 }

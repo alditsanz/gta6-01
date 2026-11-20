@@ -1,85 +1,76 @@
-// Solmar Heat — modshop.js
-// Lou's Mod Shop (round 10, new system): real car upgrades the player buys
-// with mission money and keeps in the autosave. Three categories — Engine,
-// Armor, Tires — three levels each, prices balanced against mission payouts
-// (a level-1 part costs about one easy job; level 3 costs a story finale).
-// Upgrades change the car the player is driving right now and are visible
-// in the HUD and the garage panel.
+// modshop.js — Lou's Mod Shop: Engine, Armor and Tires upgrades.
+// Three categories, three levels each, bought with game money at Lou's
+// (next door to the Paint Shop). Levels persist in the autosave and
+// apply to whatever car the player is driving.
 
-import { MOD_CATEGORIES, modNextPrice } from './config.js';
+export const MOD_CATEGORIES = [
+  {
+    id: 'engine', name: 'Engine', blurb: 'Top speed and acceleration',
+    costs: [250, 500, 950], perLevel: 0.09, // +9% speed/accel per level
+  },
+  {
+    id: 'armor', name: 'Armor', blurb: 'Damage taken is reduced',
+    costs: [220, 480, 900], perLevel: 0.22, // -22% damage per level
+  },
+  {
+    id: 'tires', name: 'Tires', blurb: 'Grip in corners and rain',
+    costs: [180, 400, 800], perLevel: 0.05, // +grip per level
+  },
+];
 
-/** Fresh mod state: every category at level 0, no car modded yet. */
+export const MOD_MAX_LEVEL = 3;
+
 export function createMods() {
   return { engine: 0, armor: 0, tires: 0 };
 }
 
-/** Level of one category (0 = stock). */
-export function modLevel(mods, categoryId) {
-  return mods[categoryId] || 0;
+export function categoryById(id) { return MOD_CATEGORIES.find((c) => c.id === id) || null; }
+
+export function nextCost(mods, catId) {
+  const cat = categoryById(catId);
+  if (!cat) return null;
+  const level = mods[catId] || 0;
+  if (level >= MOD_MAX_LEVEL) return null;
+  return cat.costs[level];
 }
 
-/** The bought level's stats for a category, or null at level 0. */
-export function modLevelStats(categoryId, level) {
-  const cat = MOD_CATEGORIES.find((c) => c.id === categoryId);
-  if (!cat || level <= 0) return null;
-  return cat.levels[level - 1] || null;
+// Buy the next level. wallet is {money}; returns a result event.
+export function buyMod(mods, wallet, catId) {
+  const cat = categoryById(catId);
+  if (!cat) return { ok: false, reason: 'unknown-category' };
+  const cost = nextCost(mods, catId);
+  if (cost === null) return { ok: false, reason: 'max-level', category: cat };
+  if (wallet.money < cost) return { ok: false, reason: 'cannot-afford', category: cat, cost };
+  wallet.money -= cost;
+  mods[catId] = (mods[catId] || 0) + 1;
+  return { ok: true, category: cat, cost, level: mods[catId] };
 }
 
-/**
- * Buy the next level of a category. `money` is the player's current cash.
- * Returns {ok, price, level} or {ok: false, reason}.
- */
-export function buyMod(mods, categoryId, money) {
-  const level = modLevel(mods, categoryId);
-  const price = modNextPrice(categoryId, level);
-  if (price === null) return { ok: false, reason: 'maxed' };
-  if (money < price) return { ok: false, reason: 'broke' };
-  mods[categoryId] = level + 1;
-  return { ok: true, price, level: level + 1 };
-}
-
-/**
- * Apply the bought mods to a car's live stats. `base` is the car's model
- * stats {top, accel} plus its maxHealth. Returns the effective stats.
- */
-export function moddedCarStats(mods, base) {
-  const engine = modLevelStats('engine', modLevel(mods, 'engine'));
-  const armor = modLevelStats('armor', modLevel(mods, 'armor'));
-  const tires = modLevelStats('tires', modLevel(mods, 'tires'));
+// Apply mods to a car's base stats, returning effective stats.
+export function effectiveStats(car, mods) {
+  const e = mods.engine || 0, t = mods.tires || 0;
+  const engineCat = categoryById('engine'), tiresCat = categoryById('tires');
   return {
-    top: base.top * (engine ? engine.topMult : 1),
-    accel: base.accel * (engine ? engine.accelMult : 1),
-    maxHealth: base.maxHealth + (armor ? armor.healthBonus : 0),
-    grip: tires ? tires.gripMult : 1,
+    topSpeed: car.topSpeed * (1 + engineCat.perLevel * e),
+    accel: car.accel * (1 + engineCat.perLevel * e),
+    grip: Math.min(0.99, car.grip + tiresCat.perLevel * t),
   };
 }
 
-/** Total dollars spent on mods so far (for the garage panel). */
-export function modsSpent(mods) {
-  let total = 0;
+// Damage after armor: level 3 armor cuts wall/crash damage by 66%.
+export function damageAfterArmor(amount, mods) {
+  const armorCat = categoryById('armor');
+  const factor = 1 - armorCat.perLevel * (mods.armor || 0);
+  return Math.max(1, Math.round(amount * Math.max(0.1, factor)));
+}
+
+export function serializeMods(mods) { return { engine: mods.engine | 0, armor: mods.armor | 0, tires: mods.tires | 0 }; }
+
+export function restoreMods(mods, saved) {
+  if (!saved) return mods;
   for (const cat of MOD_CATEGORIES) {
-    for (let l = 1; l <= modLevel(mods, cat.id); l++) {
-      total += cat.levels[l - 1].price;
-    }
+    const v = saved[cat.id];
+    if (typeof v === 'number') mods[cat.id] = Math.max(0, Math.min(MOD_MAX_LEVEL, Math.floor(v)));
   }
-  return total;
-}
-
-/** One-line summary for the HUD ("ENG 2 · ARM 1 · TIR 0"). */
-export function modsSummary(mods) {
-  return `ENG ${mods.engine} · ARM ${mods.armor} · TIR ${mods.tires}`;
-}
-
-/** Serialise mods for the save file. */
-export function modsSave(mods) {
-  return { engine: mods.engine, armor: mods.armor, tires: mods.tires };
-}
-
-/** Restore mods from a save file. */
-export function modsLoad(mods, saved) {
-  if (!saved || typeof saved !== 'object') return;
-  for (const id of ['engine', 'armor', 'tires']) {
-    const v = saved[id];
-    if (typeof v === 'number' && v >= 0 && v <= 3) mods[id] = Math.floor(v);
-  }
+  return mods;
 }

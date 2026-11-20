@@ -3,37 +3,31 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Heat — An Open-World Crime Story</title>
 <link rel="icon" href="data:,">
+<title>Solmar Heat — an open-world crime story</title>
 <style>
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: #0b1020;
-    height: 100%;
-    overflow: hidden;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  #wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
-    width: 100vw;
-  }
-  canvas {
-    display: block;
-    width: min(100vw, calc(100vh * 16 / 9));
-    height: min(100vh, calc(100vw * 9 / 16));
-    background: #0b1020;
-    cursor: crosshair;
-  }
+  html, body { margin: 0; padding: 0; background: #10101e; color: #f2f2f2; font-family: system-ui, sans-serif; }
+  main { max-width: 1280px; margin: 0 auto; padding: 12px; }
+  h1 { font-size: 22px; margin: 6px 0; color: #ffd700; letter-spacing: 1px; }
+  p { margin: 6px 0 10px; line-height: 1.45; }
+  canvas { display: block; width: 100%; height: auto; background: #87ceeb; border: 2px solid #ffd700; border-radius: 6px; }
+  .keys { font-size: 14px; color: #cfcfe0; }
+  .keys b { color: #ffffff; }
 </style>
 </head>
 <body>
-<div id="wrap">
+<main>
+  <h1>SOLMAR HEAT</h1>
+  <p>An open-world crime story in the sun-soaked city of Solmar. Steal cars, run jobs for Lena Voss,
+     dodge the SCPD, win races, take turf, and finish the seven-job story to become a Solmar Legend.</p>
   <canvas id="game" width="1280" height="720"></canvas>
-</div>
-<script type="module" src="./src/main.js"></script>
+  <p class="keys">
+    <b>WASD / arrows</b> move &amp; drive · <b>E</b> steal / exit car · <b>Mouse</b> aim &amp; shoot ·
+    <b>R</b> reload · <b>F</b> punch · <b>Space</b> handbrake · <b>T</b> taxi fare · <b>Shift</b> sprint ·
+    <b>Y</b> Lou's Paint Shop · <b>U</b> Lou's Mod Shop · <b>G</b> start a turf war · <b>P</b> pause · <b>M</b> mute
+  </p>
+  <p class="keys">Progress saves automatically in your browser. A wholly original game — no part of it comes from any commercial game.</p>
+</main>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>

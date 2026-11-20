@@ -1,77 +1,72 @@
-// Solmar Heat — races.js
-// Street races: three routes, a checkpoint chain, a par time and a payout
-// scaled by difficulty. Completable in any stealable car. Pure state.
+// races.js — three street races, one per difficulty.
+// A checkered starter marker, a chain of checkpoints across the city,
+// a par time, and a cash payout scaled by difficulty. Fail and retry.
 
-import { RACES } from './config.js';
+import { dist, ROAD_CENTERS } from './config.js';
 
-/** Fresh race state. */
-export function createRaces() {
-  return {
-    active: null, // {race, checkpoint, timer}
-    results: {}, // race id -> {best, wins}
-  };
-}
+function at(col, row) { return { x: ROAD_CENTERS[col], y: ROAD_CENTERS[row] }; }
 
-/** Start a race by id. Returns the active race or null. */
-export function startRace(state, raceId) {
-  const race = RACES.find((r) => r.id === raceId);
-  if (!race || state.active) return null;
-  state.active = { race, checkpoint: 0, timer: race.par };
-  return state.active;
-}
+export const RACES = [
+  {
+    id: 'race-easy', name: 'Sunset Sprint', difficulty: 'easy', pay: 150, par: 75,
+    start: at(0, 2),
+    checkpoints: [at(2, 2), at(4, 2), at(4, 0), at(6, 0)],
+  },
+  {
+    id: 'race-medium', name: 'Canal Circuit', difficulty: 'medium', pay: 300, par: 115,
+    start: at(6, 6),
+    checkpoints: [at(8, 6), at(8, 8), at(6, 8), at(5, 6), at(6, 4)],
+  },
+  {
+    id: 'race-hard', name: 'Solmar Grand Run', difficulty: 'hard', pay: 600, par: 165,
+    start: at(0, 8),
+    checkpoints: [at(3, 8), at(3, 5), at(6, 5), at(6, 2), at(8, 2), at(8, 0)],
+  },
+];
 
-/**
- * Advance the active race by dt. `near` is (x, y) => boolean for the
- * current checkpoint. Returns events: [{type: 'checkpoint'|'won'|'lost', ...}]
- */
-export function tickRace(state, dt, near) {
-  const events = [];
-  const a = state.active;
-  if (!a) return events;
-  a.timer -= dt;
-  const cp = a.race.checkpoints[a.checkpoint];
-  if (cp && near(cp.x, cp.y, 56)) {
-    a.checkpoint++;
-    events.push({ type: 'checkpoint', index: a.checkpoint, total: a.race.checkpoints.length });
-    if (a.checkpoint >= a.race.checkpoints.length) {
-      const rec = state.results[a.race.id] || { best: null, wins: 0 };
-      rec.wins++;
-      const time = a.race.par - a.timer;
-      if (rec.best === null || time < rec.best) rec.best = time;
-      state.results[a.race.id] = rec;
-      events.push({ type: 'won', amount: a.race.payout, race: a.race, time });
-      state.active = null;
-      return events;
+export function raceById(id) { return RACES.find((r) => r.id === id) || null; }
+
+export class RaceManager {
+  constructor() {
+    this.active = null;
+    this.index = 0;
+    this.timeLeft = 0;
+    this.elapsed = 0;
+    this.wins = {};
+  }
+
+  start(race) {
+    this.active = race;
+    this.index = 0;
+    this.timeLeft = race.par;
+    this.elapsed = 0;
+    return race;
+  }
+
+  currentCheckpoint() {
+    if (!this.active) return null;
+    return this.active.checkpoints[this.index] || null;
+  }
+
+  update(dt, px, py) {
+    if (!this.active) return null;
+    this.timeLeft -= dt; this.elapsed += dt;
+    if (this.timeLeft <= 0) {
+      const race = this.active; this.active = null;
+      return { type: 'race-failed', race };
     }
+    const cp = this.currentCheckpoint();
+    if (cp && dist(px, py, cp.x, cp.y) <= 72) {
+      this.index += 1;
+      if (this.index >= this.active.checkpoints.length) {
+        const race = this.active; this.active = null;
+        this.wins[race.id] = (this.wins[race.id] || 0) + 1;
+        return { type: 'race-complete', race, pay: race.pay, elapsed: this.elapsed };
+      }
+      return { type: 'checkpoint', index: this.index, total: this.active.checkpoints.length };
+    }
+    return null;
   }
-  if (a.timer <= 0) {
-    events.push({ type: 'lost', race: a.race });
-    state.active = null;
-  }
-  return events;
-}
 
-/** The next checkpoint the HUD arrow should point at, or null. */
-export function nextCheckpoint(state) {
-  const a = state.active;
-  if (!a) return null;
-  return a.race.checkpoints[a.checkpoint] || null;
-}
-
-/** Checkpoint progress as "2/6". */
-export function raceProgress(state) {
-  const a = state.active;
-  if (!a) return '';
-  return `${a.checkpoint}/${a.race.checkpoints.length}`;
-}
-
-/** The race starter nearest to (x, y), within range, or null. */
-export function raceAt(x, y, range = 60) {
-  let best = null;
-  let bd = Infinity;
-  for (const r of RACES) {
-    const d = Math.hypot(r.start.x - x, r.start.y - y);
-    if (d < range && d < bd) { bd = d; best = r; }
-  }
-  return best;
+  cancel() { this.active = null; }
 }
