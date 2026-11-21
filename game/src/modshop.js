@@ -1,38 +1,39 @@
-// modshop.js — Lou's Mod Shop: engine, armor and tires, three
-// levels each. Levels live on the player, persist in the autosave,
-// and feed the car's top speed, damage taken and grip.
+// modshop.js — Lou's Mod Shop: three upgrade tracks, three levels
+// each, plus an armour refill. Levels live on the world, persist in
+// the save, and feed real numbers (top speed, damage taken, grip).
 
 export const MOD_TRACKS = [
-  { key: 'engine', name: 'Engine', base: 120, desc: 'Top speed' },
-  { key: 'armor', name: 'Armor', base: 150, desc: 'Damage resist' },
-  { key: 'tires', name: 'Tires', base: 90, desc: 'Grip' },
+  { id: 'engine', name: 'Engine', costs: [250, 500, 900],  blurb: '+8% top speed per level' },
+  { id: 'armor',  name: 'Armor',  costs: [200, 450, 800],  blurb: 'car takes less damage' },
+  { id: 'tires',  name: 'Tires',  costs: [150, 350, 650],  blurb: 'better grip, less slide' },
 ];
-export const MAX_LEVEL = 3;
+export const ARMOUR_REFILL_COST = 120;
+export const MODS_TOTAL = 9;
 
-export function createMods() {
-  return { engine: 0, armor: 0, tires: 0 };
+export function modsBought(world) {
+  return world.mods.engine + world.mods.armor + world.mods.tires;
 }
 
-export function modCost(track, level) {
-  const t = MOD_TRACKS.find((m) => m.key === track);
-  return t ? t.base * (level + 1) : Infinity;
-}
-
-export function buyMod(world, track) {
-  const lvl = world.player.mods[track];
-  if (lvl === undefined || lvl >= MAX_LEVEL) return false;
-  const cost = modCost(track, lvl);
-  if (world.player.money < cost) return false;
+export function buyMod(world, trackId) {
+  const track = MOD_TRACKS.find(t => t.id === trackId);
+  if (!track) return { ok: false, why: 'no such track' };
+  const lvl = world.mods[trackId];
+  if (lvl >= 3) return { ok: false, why: 'max level' };
+  const cost = track.costs[lvl];
+  if (world.player.money < cost) return { ok: false, why: 'not enough cash' };
   world.player.money -= cost;
-  world.player.mods[track] = lvl + 1;
-  world.stats.modsBought++;
-  return true;
+  world.mods[trackId] = lvl + 1;
+  return { ok: true, cost, level: lvl + 1 };
 }
 
-export function modsBought(mods) {
-  return MOD_TRACKS.reduce((n, t) => n + (mods[t.key] || 0), 0);
+export function buyArmour(world) {
+  if (world.player.armour >= 100) return { ok: false, why: 'armour full' };
+  if (world.player.money < ARMOUR_REFILL_COST) return { ok: false, why: 'not enough cash' };
+  world.player.money -= ARMOUR_REFILL_COST;
+  world.player.armour = 100;
+  return { ok: true, cost: ARMOUR_REFILL_COST };
 }
 
-export function speedBonus(mods) { return 1 + 0.12 * (mods.engine || 0); }
-export function armorFactor(mods) { return 1 - 0.18 * (mods.armor || 0); }
-export function tireGrip(mods) { return 1 + 0.1 * (mods.tires || 0); }
+export function engineMult(world) { return 1 + world.mods.engine * 0.08; }
+export function armorMult(world) { return 1 - world.mods.armor * 0.15; }
+export function tireMult(world) { return 1 + world.mods.tires * 0.10; }

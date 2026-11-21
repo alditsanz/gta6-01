@@ -1,40 +1,53 @@
-// races.js — three street races, each a checkpoint route across
-// Solmar with a par time. Beat par to win; the payout scales with
-// the route's difficulty. A failed run can always be retried.
+// races.js — three street races: a start flag, a chain of
+// checkpoints across Solmar, a par time and a cash prize scaled
+// by difficulty. Failing pays nothing and can be retried at once.
 
 export const RACES = [
-  { key: 'coast', name: 'Coast Run', par: 75, pay: 150, start: [300, 3400], points: [[300, 3400], [1500, 3400], [2700, 3300], [3300, 2500]] },
-  { key: 'grid', name: 'Grid Runner', par: 95, pay: 300, start: [500, 500], points: [[500, 500], [1700, 900], [900, 2100], [2500, 2100], [2100, 500]] },
-  { key: 'heat', name: 'Heat Lap', par: 120, pay: 600, start: [3300, 300], points: [[3300, 300], [1900, 300], [700, 1300], [1900, 2300], [3300, 1900], [3300, 300]] },
+  {
+    id: 'r-mile', name: 'Sunset Mile Sprint', diff: 'EASY', par: 75, pay: 150,
+    start: { x: 754, y: 354 },
+    checkpoints: [{ x: 754, y: 1154 }, { x: 754, y: 1954 }, { x: 1554, y: 1954 }, { x: 1554, y: 2754 }],
+  },
+  {
+    id: 'r-canal', name: 'Canal Row Run', diff: 'MEDIUM', par: 105, pay: 300,
+    start: { x: 2354, y: 354 },
+    checkpoints: [{ x: 2354, y: 1554 }, { x: 1554, y: 1554 }, { x: 1554, y: 2354 }, { x: 754, y: 2354 }, { x: 754, y: 3154 }],
+  },
+  {
+    id: 'r-crown', name: 'Crown of Solmar', diff: 'HARD', par: 140, pay: 600,
+    start: { x: 3154, y: 3154 },
+    checkpoints: [{ x: 3154, y: 754 }, { x: 1954, y: 754 }, { x: 1954, y: 1954 }, { x: 754, y: 1954 }, { x: 754, y: 3154 }, { x: 1954, y: 3154 }],
+  },
 ];
 
-export function createRaceState() {
-  return { active: null, idx: 0, t: 0, done: {} };
+export function raceById(id) { return RACES.find(r => r.id === id); }
+
+export function startRace(world, def) {
+  world.race = { def, cp: 0, t: 0, done: false };
+  return world.race;
 }
 
-export function startRace(world, key) {
-  const race = RACES.find((r) => r.key === key);
-  if (!race || !world.player.car) return false;
-  world.race = { active: race, idx: 0, t: 0, done: world.race.done };
-  return true;
-}
-
-export function stepRace(world, dt) {
-  const st = world.race;
-  if (!st.active) return null;
-  st.t += dt;
-  const race = st.active;
-  if (st.t > race.par) { st.active = null; return 'failed'; }
-  const [tx, ty] = race.points[st.idx];
-  if (Math.hypot(tx - world.player.x, ty - world.player.y) < 90) {
-    st.idx++;
-    if (st.idx >= race.points.length) {
-      world.player.money += race.pay;
-      st.done[race.key] = true;
-      world.stats.racesWon = Object.keys(st.done).length;
-      st.active = null;
-      return 'won';
+export function stepRace(world, dt, events) {
+  const race = world.race;
+  if (!race || race.done) return;
+  race.t += dt;
+  const p = world.player;
+  if (!p.car) return;
+  const target = race.def.checkpoints[race.cp];
+  if (target && Math.hypot(target.x - p.car.x, target.y - p.car.y) < 85) {
+    race.cp++;
+    events.push({ type: 'checkpoint', n: race.cp, total: race.def.checkpoints.length });
+    if (race.cp >= race.def.checkpoints.length) {
+      race.done = true;
+      if (race.t <= race.def.par) {
+        world.player.money += race.def.pay;
+        world.player.rp += 30;
+        world.stats.racesWon++;
+        events.push({ type: 'race-won', def: race.def, t: race.t });
+      } else {
+        events.push({ type: 'race-late', def: race.def, t: race.t });
+      }
+      world.race = null;
     }
   }
-  return null;
 }

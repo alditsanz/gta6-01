@@ -1,26 +1,26 @@
-// random.js — deterministic seeded randomness for Solmar Heat.
-// Every random choice in the world, props and screenshot paths flows
-// through a generator built here, so a seed always rebuilds the same
-// city. Nothing in the game logic touches the host's global random.
+// random.js — the single source of randomness in Solmar Heat.
+// A mulberry32 generator: tiny, fast and fully deterministic from
+// its seed, which is what makes every world reproducible.
 
 export function makeRng(seed) {
-  let state = (seed >>> 0) || 1;
-  const next = () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  let a = (seed >>> 0) || 1;
+  return function rng() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  next.int = (lo, hi) => lo + Math.floor(next() * (hi - lo + 1));
-  next.range = (lo, hi) => lo + next() * (hi - lo);
-  next.pick = (arr) => arr[Math.floor(next() * arr.length)];
-  next.chance = (p) => next() < p;
-  return next;
 }
 
+export function range(rng, lo, hi) { return lo + rng() * (hi - lo); }
+export function intRange(rng, lo, hi) { return lo + Math.floor(rng() * (hi - lo + 1)); }
+export function pick(rng, arr) { return arr[Math.floor(rng() * arr.length) % arr.length]; }
+export function chance(rng, p) { return rng() < p; }
+
+// Deterministic 2D hash for per-block / per-building variation
+// (roof furniture, ground tints) — stable across runs and saves.
 export function hash2(a, b) {
-  let h = Math.imul(a + 101, 374761393) ^ Math.imul(b + 57, 668265263);
+  let h = (a * 374761393 + b * 668265263) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }

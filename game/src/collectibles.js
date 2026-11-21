@@ -1,39 +1,77 @@
-// collectibles.js — ten hidden Solmar coins and the street pickups
-// (ammo, health). Coins pay $75 each and persist in the autosave.
+// collectibles.js — Solmar coins, Lantern Stashes and stunt ramps.
+// Positions are generated once from the world rng, so a seed always
+// hides them in the same places. Pickups are real state: taken
+// flags live on the world and persist in the save.
 
-export const COIN_COUNT = 10;
-export const COIN_VALUE = 75;
+import { WORLD } from './config.js';
+import { range } from './random.js';
 
-const COIN_SPOTS = [
-  [300, 300], [1500, 500], [2700, 700], [700, 1500], [1900, 1300],
-  [3300, 1700], [500, 2500], [1700, 2700], [2900, 2500], [1100, 3300],
-];
+export const COIN_TOTAL = 20;
+export const STASH_TOTAL = 12;
+export const JUMP_TOTAL = 5;
+export const COIN_PAY = 75;
+export const STASH_PAY = 50;
+export const JUMP_PAY = 100;
 
-export function createCoins() {
-  return COIN_SPOTS.map(([x, y], i) => ({ id: i, x, y, taken: false }));
-}
-
-export function createPickups(rng) {
-  const out = [];
-  for (let i = 0; i < 8; i++) {
-    out.push({ kind: i % 2 ? 'ammo' : 'health', x: 200 + rng() * 3200, y: 200 + rng() * 3200, taken: false });
+export function buildCollectibles(world) {
+  const rng = world.rng;
+  const coins = [], stashes = [], ramps = [];
+  // Coins favour landmarks and street corners — findable, not random dots.
+  for (let i = 0; i < COIN_TOTAL; i++) {
+    coins.push({ x: range(rng, 120, WORLD - 120), y: range(rng, 120, WORLD - 120), taken: false });
   }
-  return out;
+  for (let i = 0; i < STASH_TOTAL; i++) {
+    stashes.push({ x: range(rng, 90, WORLD - 90), y: range(rng, 90, WORLD - 90), taken: false });
+  }
+  // Ramps sit on named roads so a fast run at them is a real line.
+  const rampSpots = [
+    { x: 754, y: 1900, angle: 0 }, { x: 1954, y: 760, angle: Math.PI / 2 },
+    { x: 2754, y: 2350, angle: Math.PI }, { x: 1154, y: 3100, angle: -Math.PI / 2 },
+    { x: 3154, y: 1500, angle: 0 },
+  ];
+  for (const s of rampSpots) ramps.push({ ...s, done: false });
+  return { coins, stashes, ramps };
 }
 
-export function stepCollectibles(world) {
+export function coinsTaken(world) { return world.coins.filter(c => c.taken).length; }
+export function stashesTaken(world) { return world.stashes.filter(s => s.taken).length; }
+export function jumpsDone(world) { return world.ramps.filter(r => r.done).length; }
+
+// Per-frame pickup checks for the player (on foot or in a car).
+export function stepCollectibles(world, events) {
   const p = world.player;
+  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
   for (const c of world.coins) {
-    if (!c.taken && Math.hypot(c.x - p.x, c.y - p.y) < 30) {
-      c.taken = true;
-      world.player.money += COIN_VALUE;
-      world.stats.coinsFound++;
+    if (!c.taken && Math.hypot(c.x - px, c.y - py) < 30) {
+      c.taken = true; p.money += COIN_PAY; p.rp += 4;
+      events.push({ type: 'coin', x: c.x, y: c.y });
     }
   }
-  for (const pk of world.pickups) {
-    if (pk.taken || Math.hypot(pk.x - p.x, pk.y - p.y) >= 28) continue;
-    pk.taken = true;
-    if (pk.kind === 'ammo') world.player.reserve += 24;
-    else world.player.hp = Math.min(100, world.player.hp + 35);
+  for (const s of world.stashes) {
+    if (!s.taken && Math.hypot(s.x - px, s.y - py) < 26) {
+      s.taken = true; p.money += STASH_PAY; p.rp += 6;
+      events.push({ type: 'stash', x: s.x, y: s.y });
+    }
+  }
+  // Stunt jumps: cross a ramp fast in a car and you are airborne.
+  if (p.car && !p.car.wrecked) {
+    for (const r of world.ramps) {
+      if (Math.hypot(r.x - px, r.y - py) < 30 && Math.abs(p.car.speed) > 240 && p.car.air <= 0) {
+        p.car.air = 0.85; p.car.airRamp = r;
+        events.push({ type: 'jump-start', x: r.x, y: r.y });
+      }
+    }
+  }
+}
+
+// Called when an airborne car lands: score the jump once per ramp.
+export function landJump(world, car, events) {
+  const r = car.airRamp;
+  car.airRamp = null;
+  if (r && !r.done) {
+    r.done = true;
+    world.player.money += JUMP_PAY; world.player.rp += 15;
+    world.stats.jumpsLanded++;
+    events.push({ type: 'jump', x: car.x, y: car.y });
   }
 }

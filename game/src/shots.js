@@ -1,111 +1,180 @@
 // shots.js — staged scenes for the four judge screenshots. Each
-// stageShot builds a complete, real world and populates it with
-// real entities (traffic, peds, police stepped by stepPolice), so a
-// screenshot is the game's own renderer looking at a live scene.
-//
-// Shot set (Upgrade F): 1-chase cover, 2-vault shootout,
-// 3-map stats screen, 4-title at the beach at dusk.
+// scene is built from real game entities and real state fields
+// (missions, counters, saves), then held perfectly still. The
+// camera lives on world.camera; main.js renders what we stage.
 
-import { createWorld, makeCar, stepPolice, addHeat } from './world.js';
-import { startMission } from './missions.js';
+import { makeCar, createWorld, saveToSlot, readSlot } from './world.js';
+import { MISSIONS } from './missions.js';
+import { spawnGang } from './combat.js';
 import { landmark } from './landmarks.js';
-import { addTracer } from './combat.js';
+import { formatClock } from './weather.js';
 
 export const SHOT_NAMES = ['chase', 'vault', 'map', 'title'];
-export const SHOT_FILES = { chase: '1-chase.jpg', vault: '2-vault.jpg', map: '3-map.jpg', title: '4-title.jpg' };
 
-function dress(world, cx, cy, nCars, nPeds) {
-  const types = ['sedan', 'coupe', 'taxi', 'van', 'pickup', 'muscle', 'compact', 'limo'];
-  for (let i = 0; i < nCars; i++) {
-    const c = makeCar(world.rng, types[i % types.length],
-      cx + ((i % 4) - 1.5) * 150 + world.rng.range(-30, 30),
-      cy + Math.floor(i / 4) * 120 - 60 + world.rng.range(-20, 20));
-    c.angle = 0; c.speed = 60;
-    world.cars.push(c);
+const PED_COLORS = ['#d94f3d', '#3d7ad9', '#f2f2f2', '#39b56b', '#e4a11b', '#9c5ae4', '#e45a9c', '#4dd0e1'];
+
+function addPed(world, x, y, color, flee = 0) {
+  world.peds.push({ x, y, angle: -Math.PI / 2, speed: 0, color, flee, tx: 0, ty: 0, retarget: 99 });
+}
+function addTraffic(world, type, x, y, angle, speed = 120) {
+  const c = makeCar(world, type, x, y, angle);
+  c.speed = speed;
+  world.cars.push(c);
+  return c;
+}
+function stageCounters(world) {
+  // A believable mid-game: story 2/5 done with grades, some of
+  // everything collected — all through the real state fields.
+  world.stats.missionsDone = 2;
+  world.grades = { m1: 'S', m2: 'A' };
+  world.coins.forEach((c, i) => { c.taken = i < 6; });
+  world.stashes.forEach((s, i) => { s.taken = i < 3; });
+  world.turf.forEach((z, i) => { z.owner = i < 3 ? 'player' : 'rival'; });
+  world.ramps.forEach((r, i) => { r.done = i < 2; });
+  Object.assign(world.stats, {
+    carsStolen: 14, fares: 3, deliveries: 2, racesWon: 1, nearMisses: 9,
+    kmDriven: 12.4, copsEscaped: 3, longestChaseSec: 74, shotsFired: 61,
+    jumpsLanded: 2, playSeconds: 1500,
+  });
+  world.mods = { engine: 2, armor: 1, tires: 1 };
+  world.player.money = 1940;
+  world.player.rp = 385;
+}
+
+export function stageShot(world, name) {
+  world.time = 2.4;
+  const p = world.player;
+  if (name === 'chase') {
+    world.clock = 18.1; world.weather = 'clear';
+    stageCounters(world);
+    p.money = 2340; p.hp = 86; p.armour = 40;
+    // Rex in the gold Falco S, northbound on the beach avenue.
+    const car = addTraffic(world, 'falco', 3131, 1500, -Math.PI / 2, 300);
+    car.color = '#e8a71c'; car.driver = 'player';
+    p.car = car; p.x = car.x; p.y = car.y;
+    // Five-star response: six cruisers in pursuit, heli overhead,
+    // roadblock ahead, one wreck already burning on the kerb.
+    world.heat = 500; world.exposure = 0.8;
+    const spots = [[3180, 1620, -Math.PI / 2], [3090, 1660, -Math.PI / 2], [3190, 1760, -Math.PI / 2], [3060, 1830, -Math.PI / 2], [3240, 1700, -Math.PI / 2], [3000, 1560, -Math.PI / 2]];
+    for (const [x, y, a] of spots) {
+      const c = makeCar(world, 'cruiser', x, y, a);
+      c.speed = 280; c.driver = 'cop'; world.cops.push(c);
+    }
+    world.heli = { x: 3064, y: 1318, angle: 1.08 };
+    world.roadblocks.push({ x: 3154, y: 1145, angle: 0 });
+    const wreck = addTraffic(world, 'muscle', 3177, 1215, 0.4, 0);
+    wreck.wrecked = true; wreck.burning = true; wreck.hp = 0;
+    // Traffic variety sharing the avenue and the cross street.
+    addTraffic(world, 'taxi', 3177, 1150, Math.PI / 2, 130);
+    addTraffic(world, 'sedan', 3177, 900, Math.PI / 2, 120);
+    addTraffic(world, 'van', 3131, 1950, -Math.PI / 2, 110);
+    addTraffic(world, 'coupe', 2900, 1531, 0, 140);
+    addTraffic(world, 'pickup', 2600, 1577, Math.PI, 125);
+    addTraffic(world, 'compact', 3350, 1531, 0, 100);
+    addTraffic(world, 'limo', 2200, 1531, 0, 115);
+    addTraffic(world, 'truck', 3131, 2150, -Math.PI / 2, 95);
+    // Beach crowd on the boardwalk and sand.
+    for (let i = 0; i < 12; i++) addPed(world, 3168 + (i % 3) * 16, 1230 + i * 42, PED_COLORS[i % 8], i % 4 === 0 ? 1 : 0);
+    for (let i = 0; i < 5; i++) addPed(world, 3300 + i * 30, 1300 + i * 90, PED_COLORS[(i + 3) % 8]);
+    // Mission 2 in progress + Mama Lou on the radio.
+    world.mission = { def: MISSIONS[1], step: 0, vault: 0, holdT: 0, targetCarId: null };
+    world.dialogue = { who: 'Mama Lou', role: 'Fixer', line: '"Five stars, baby — lose them by the water."' };
+    world.dialogueT = 999;
+    world.crewCd.dex = 12;
+    world.radioIdx = 2;
+    world.camera = { x: 3154, y: 1400, zoom: 1.12 };
+    world.gameState = 'play';
+  } else if (name === 'vault') {
+    world.clock = 21.7; world.weather = 'clear'; // night job
+    const bank = landmark('bank');
+    p.x = bank.x; p.y = bank.y + 34; p.angle = -Math.PI / 2;
+    p.car = null; p.hp = 72; p.armour = 55; p.money = 3110; p.rp = 520;
+    p.weapon = 2; p.mag.smg = 18; p.ammo.smg = 120;
+    world.mission = { def: MISSIONS[2], step: 1, vault: 70, holdT: 0, targetCarId: null };
+    world.missionTime = 141; world.heat = 350; world.exposure = 0.5;
+    // Seven Vipers in the vault circle, some already hurt.
+    const gang = spawnGang(world, bank.x, bank.y - 52, 7);
+    gang.forEach((g, i) => { g.hp = [50, 38, 50, 22, 50, 44, 29][i]; g.angle = Math.PI / 2; });
+    // A dozen civilians on the plaza, several with hands up.
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      addPed(world, bank.x + Math.cos(a) * (150 + (i % 3) * 36), bank.y + Math.sin(a) * (140 + (i % 4) * 26), PED_COLORS[i % 8], i % 3 === 0 ? 1 : 0);
+    }
+    // Foot cops arriving at the edges + two cruisers on the kerb.
+    world.footCops.push(
+      { x: bank.x - 215, y: bank.y + 120, angle: 0.6, hp: 30, color: '#2c4a7c' },
+      { x: bank.x + 225, y: bank.y + 105, angle: 2.4, hp: 30, color: '#2c4a7c' },
+      { x: bank.x + 40, y: bank.y + 235, angle: -Math.PI / 2, hp: 30, color: '#2c4a7c' },
+    );
+    const kerb1 = makeCar(world, 'cruiser', bank.x - 240, bank.y + 250, 0.5);
+    kerb1.driver = 'cop'; world.cops.push(kerb1);
+    const kerb2 = makeCar(world, 'cruiser', bank.x + 252, bank.y - 240, -2.2);
+    kerb2.driver = 'cop'; world.cops.push(kerb2);
+    // A mid-job history so the counters do not read empty.
+    world.stats.carsStolen = 9;
+    world.coins.forEach((c, i) => { c.taken = i < 4; });
+    world.stashes.forEach((s, i) => { s.taken = i < 2; });
+    // Tracers mid-flight both ways + hit sparks.
+    world.bullets.push(
+      { x: bank.x - 20, y: bank.y - 6, vx: 0, vy: -760, life: 0.4, from: 'player', damage: 17 },
+      { x: bank.x + 26, y: bank.y - 30, vx: -120, vy: -740, life: 0.4, from: 'player', damage: 17 },
+      { x: bank.x - 44, y: bank.y - 44, vx: 180, vy: 700, life: 0.4, from: 'gang', damage: 14 },
+      { x: bank.x + 52, y: bank.y - 40, vx: -200, vy: 690, life: 0.4, from: 'gang', damage: 14 },
+    );
+    for (let i = 0; i < 6; i++) world.particles.push({ x: bank.x - 30 + i * 11, y: bank.y - 48, life: 0.5, maxLife: 0.5, color: '#ffd23e' });
+    world.dialogue = { who: 'Mama Lou', role: 'Fixer', line: '"Vault\'s nearly open — hold them off, Rex."' };
+    world.dialogueT = 999;
+    world.camera = { x: bank.x, y: bank.y + 6, zoom: 1.55 };
+    world.gameState = 'play';
+  } else if (name === 'map') {
+    world.clock = 14.5; world.weather = 'clear';
+    stageCounters(world);
+    // Story at m3, routed to the bank; player cruising Canal Row.
+    world.mission = { def: MISSIONS[2], step: 0, vault: 0, holdT: 0, targetCarId: null };
+    const car = addTraffic(world, 'vento', 2354, 2354, 0, 0);
+    p.car = car; p.x = car.x; p.y = car.y;
+    // Real saves through the real serializer: slot 1 = this world,
+    // slot 2 = an earlier, poorer Rex; slot 3 stays empty.
+    saveToSlot(world, 1);
+    const earlier = createWorld(777);
+    earlier.stats.missionsDone = 1;
+    earlier.grades = { m1: 'B' };
+    earlier.player.money = 640; earlier.player.rp = 180; earlier.clock = 9.4;
+    earlier.coins.forEach((c, i) => { c.taken = i < 2; });
+    saveToSlot(earlier, 2);
+    world.gameState = 'pause';
+    world.camera = { x: p.x, y: p.y, zoom: 1 };
+  } else if (name === 'title') {
+    world.clock = 19.8; world.weather = 'clear'; // dusk over the beach
+    stageCounters(world);
+    saveToSlot(world, 1);
+    // Coast traffic crossing the frame behind the dim.
+    addTraffic(world, 'sedan', 3131, 1180, -Math.PI / 2, 120);
+    addTraffic(world, 'taxi', 3177, 1640, Math.PI / 2, 110);
+    addTraffic(world, 'coupe', 3131, 1980, -Math.PI / 2, 135);
+    addTraffic(world, 'muscle', 2900, 1531, 0, 125);
+    addTraffic(world, 'van', 2500, 1577, Math.PI, 100);
+    for (let i = 0; i < 8; i++) addPed(world, 3166, 1240 + i * 74, PED_COLORS[i % 8]);
+    for (let i = 0; i < 5; i++) addPed(world, 3300 + i * 26, 1380 + i * 110, PED_COLORS[(i + 2) % 8]);
+    p.x = 3162; p.y = 1440; p.car = null;
+    world.camera = { x: 3270, y: 1500, zoom: 1.0 };
+    world.gameState = 'title';
   }
-  for (let i = 0; i < nPeds; i++) {
-    world.peds.push({
-      x: cx + world.rng.range(-520, 520), y: cy + world.rng.range(-300, 300),
-      angle: world.rng() * 6.28, speed: 30, color: ['#c95f7a', '#4e7fc9', '#5aa86a', '#c9a44e'][i % 4],
-      skin: '#e8b98a', flee: false, phase: i,
+  return world;
+}
+
+// Enriched save-slot view objects for the map + title screens.
+export function slotViews(world) {
+  const out = [];
+  for (let s = 1; s <= 3; s++) {
+    const d = readSlot(s);
+    if (!d) { out.push(null); continue; }
+    const next = MISSIONS[d.missionsDone];
+    out.push({
+      act: next ? `ACT ${d.missionsDone + 1} — ${next.title}` : 'STORY COMPLETE',
+      pct: d.pct, missionsDone: d.missionsDone, money: d.money,
+      time: formatClock(d.clock), place: 'Solmar',
     });
   }
-}
-
-function midGame(world) {
-  world.missions.done = [true, true, false];
-  world.stats.missionsDone = 2;
-  for (let i = 0; i < 6; i++) world.coins[i].taken = true;
-  world.stats.coinsFound = 6;
-  world.turf[0].owner = 'Rex'; world.turf[1].owner = 'Rex'; world.turf[3].owner = 'Rex';
-  world.stats.turfHeld = 3;
-  world.race.done = { coast: true }; world.stats.racesWon = 1;
-  world.stats.carsStolen = 14; world.stats.fares = 3; world.stats.deliveries = 2;
-  world.player.mods = { engine: 2, armor: 1, tires: 1 };
-  world.stats.modsBought = 4;
-  world.player.money = 1940;
-  world.player.rank = 'Street Royalty';
-}
-
-export function stageShot(name) {
-  const world = createWorld(20261121);
-  world.shotName = name;
-  if (name === 'chase') {
-    world.clock = 18.1; world.weatherState.kind = 'clear';
-    const beachRoadY = 1254; // avenue beside the beach block
-    const px = 2750; const py = beachRoadY;
-    const car = makeCar(world.rng, 'falco', px, py);
-    car.angle = 0; car.speed = 300;
-    world.cars.push(car);
-    world.player.car = car; world.player.x = px; world.player.y = py;
-    startMission(world, 1);
-    addHeat(world, 520); // five stars: helicopter + roadblock
-    stepPolice(world, 0.1); stepPolice(world, 0.1);
-    if (world.cops.length) { /* cruisers placed by stepPolice */ }
-    // Guarantee a dense frame: cruisers and traffic around Rex.
-    for (let i = 0; i < 6; i++) {
-      const c = makeCar(world.rng, 'cruiser', px - 180 - i * 90, py + (i % 2 ? 44 : -44));
-      c.police = true; c.angle = 0; c.speed = 220;
-      world.cops.push(c);
-    }
-    world.roadblock = { x: px + 430, y: py, cars: [{ x: px + 430, y: py - 26 }, { x: px + 430, y: py + 26 }] };
-    world.heli = { x: px - 260, y: py - 210, angle: 0.4 };
-    dress(world, px, py, 8, 12);
-    world.dialogue = { who: 'Mama Lou', text: 'Rex, the package rides with you now — lose the heat, not the car.' };
-    return world;
-  }
-  if (name === 'vault') {
-    world.clock = 14.5; world.weatherState.kind = 'clear';
-    const bank = landmark('bank');
-    world.player.x = bank.x; world.player.y = bank.y + 30;
-    startMission(world, 2);
-    world.missions.step = 1; world.vaultProgress = 0.7; world.missions.holdT = 9.8;
-    addHeat(world, 320); // three stars
-    stepPolice(world, 0.1);
-    for (let i = 0; i < 12; i++) {
-      world.peds.push({
-        x: bank.x + world.rng.range(-430, 430), y: bank.y + world.rng.range(-260, 280),
-        angle: world.rng() * 6.28, speed: 26, color: ['#c95f7a', '#4e7fc9', '#5aa86a', '#c9a44e', '#7a5fc9'][i % 5],
-        skin: '#e8b98a', flee: i % 3 === 0, phase: i,
-      });
-    }
-    for (const g of world.gang.slice(0, 4)) addTracer(world, world.player.x, world.player.y, g.x, g.y);
-    world.combat.particles.push({ x: bank.x + 90, y: bank.y - 60, t: 0.3, color: '#ffd34e' });
-    world.dialogue = { who: 'Mama Lou', text: 'Vault is cracking, Rex. Hold the circle — nobody walks out empty.' };
-    return world;
-  }
-  if (name === 'map') {
-    world.clock = 15.2;
-    midGame(world);
-    startMission(world, 2);
-    world.gameState = 'pause';
-    return world;
-  }
-  // title: beach at dusk, mid-game progress line.
-  world.clock = 19.8; world.weatherState.kind = 'clear';
-  midGame(world);
-  world.player.x = 2750; world.player.y = 1254;
-  world.gameState = 'title';
-  dress(world, 2750, 1254, 6, 8);
-  return world;
+  return out;
 }

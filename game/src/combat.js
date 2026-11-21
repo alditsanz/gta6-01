@@ -1,91 +1,146 @@
-// combat.js — Rex's fists and pistol. Bullets are tested along
-// their whole travel segment each tick, so a fast round can never
-// tunnel through a thin target standing in its path.
+// combat.js — guns, fists and the people who shoot back. Bullets
+// travel in sub-steps so a fast round can never tunnel through a
+// thin target; gang members are real state with health pips.
 
-export const MAG = 12;
+import { addHeat } from './world.js';
 
-export function createCombat() {
-  return { bullets: [], tracers: [], particles: [] };
-}
+export const WEAPONS = [
+  { id: 'fists',  name: 'FISTS',  slot: 1, damage: 12, rate: 0.32, ammo: null },
+  { id: 'pistol', name: 'PISTOL', slot: 2, damage: 26, rate: 0.24, ammo: 'pistol', mag: 12, reload: 0.9, speed: 900, spread: 0.02 },
+  { id: 'smg',    name: 'SMG',    slot: 3, damage: 17, rate: 0.09, ammo: 'smg', mag: 30, reload: 1.3, speed: 980, spread: 0.07 },
+];
+export function weaponById(id) { return WEAPONS.find(w => w.id === id); }
 
-export function shoot(world, tx, ty) {
-  const p = world.player;
-  if (p.ammo <= 0 || p.reloadT > 0) return false;
-  p.ammo--;
-  const a = Math.atan2(ty - p.y, tx - p.x);
-  world.combat.bullets.push({ x: p.x, y: p.y, vx: Math.cos(a) * 720, vy: Math.sin(a) * 720, life: 0.7, from: 'player' });
-  world.addHeat(26);
-  return true;
-}
-
-export function reload(world) {
-  const p = world.player;
-  if (p.reloadT > 0 || p.ammo >= MAG || p.reserve <= 0) return false;
-  p.reloadT = 1.1;
-  return true;
-}
-
-export function finishReload(world) {
-  const p = world.player;
-  const take = Math.min(MAG - p.ammo, p.reserve);
-  p.ammo += take; p.reserve -= take;
-}
-
-export function punch(world) {
-  const p = world.player;
-  let hit = null;
-  for (const g of world.gang) {
-    if (Math.hypot(g.x - p.x, g.y - p.y) < 34 && g.hp > 0) { g.hp -= 1; hit = g; }
+export function spawnGang(world, x, y, n, hp = 50) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const g = {
+      x: x + (i % 3 - 1) * 44, y: y + Math.floor(i / 3) * 44 - 22,
+      angle: Math.PI, hp, maxHp: hp, color: '#7c2434', fireT: 1 + i * 0.3,
+    };
+    world.gang.push(g); out.push(g);
   }
-  return hit;
+  return out;
 }
 
-function segHits(b, nx, ny, t) {
-  // Sample the segment b->(nx,ny) so nothing thin is skipped.
-  const steps = 6;
-  for (let i = 1; i <= steps; i++) {
-    const x = b.x + (nx - b.x) * (i / steps);
-    const y = b.y + (ny - b.y) * (i / steps);
-    if (Math.hypot(t.x - x, t.y - y) < 14) return true;
-  }
-  return false;
-}
-
-export function stepCombat(world, dt) {
+// Damage the player, armour first. Returns true if the player died.
+export function damagePlayer(world, amount) {
   const p = world.player;
+  if (p.armour > 0) {
+    const absorbed = Math.min(p.armour, amount * 0.7);
+    p.armour -= absorbed;
+    amount -= absorbed;
+  }
+  p.hp -= amount;
+  world.missionDamage += amount;
+  return p.hp <= 0;
+}
+
+// The player fires toward (tx,ty). Fists swing instead of shooting.
+export function playerShoot(world, tx, ty, events) {
+  const p = world.player;
+  const w = weaponById(WEAPONS[p.weapon].id);
+  if (p.fireT > 0 || p.reloadT > 0) return;
+  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
+  if (w.id === 'fists') {
+    p.fireT = w.rate; p.punchT = 0.18;
+    // A punch lands on anyone within arm's reach in front.
+    for (const g of [...world.gang]) {
+      if (Math.hypot(g.x - px, g.y - py) < 42) hurtGang(world, g, w.damage, events);
+    }
+    for (const f of world.footCops) {
+      if (Math.hypot(f.x - px, f.y - py) < 42) { f.hp -= w.damage; addHeat(world, 30); }
+    }
+    return;
+  }
+  if (p.mag[w.ammo] <= 0) { startReload(world); return; }
+  p.mag[w.ammo]--;
+  p.fireT = w.rate;
+  world.stats.shotsFired++;
+  const ang = Math.atan2(ty - py, tx - px) + (world.rng() - 0.5) * 2 * w.spread;
+  world.bullets.push({ x: px, y: py, vx: Math.cos(ang) * w.speed, vy: Math.sin(ang) * w.speed, life: 0.55, from: 'player', damage: w.damage });
+  addHeat(world, 12);
+  events.push({ type: 'shot', x: px, y: py });
+}
+
+export function startReload(world) {
+  const p = world.player;
+  const w = WEAPONS[p.weapon];
+  if (!w.ammo || p.reloadT > 0) return;
+  const need = w.mag - p.mag[w.ammo];
+  if (need <= 0 || p.ammo[w.ammo] <= 0) return;
+  p.reloadT = w.reload;
+  p.reloadWeapon = w.ammo;
+}
+
+function finishReload(world) {
+  const p = world.player;
+  const w = weaponById(p.reloadWeapon === 'smg' ? 'smg' : 'pistol');
+  const move = Math.min(w.mag - p.mag[w.ammo], p.ammo[w.ammo]);
+  p.mag[w.ammo] += move;
+  p.ammo[w.ammo] -= move;
+  p.reloadT = 0;
+}
+
+function hurtGang(world, g, damage, events) {
+  g.hp -= damage;
+  if (g.hp <= 0) {
+    world.gang.splice(world.gang.indexOf(g), 1);
+    world.player.money += 25;
+    events.push({ type: 'gang-down', x: g.x, y: g.y });
+  }
+}
+
+// Bullets move in 3 sub-steps per frame (anti-tunnelling) and test
+// every plausible target along the way.
+export function stepCombat(world, dt, events) {
+  const p = world.player;
+  if (p.fireT > 0) p.fireT -= dt;
+  if (p.punchT > 0) p.punchT -= dt;
   if (p.reloadT > 0) { p.reloadT -= dt; if (p.reloadT <= 0) finishReload(world); }
-  const keep = [];
-  for (const b of world.combat.bullets) {
-    const nx = b.x + b.vx * dt; const ny = b.y + b.vy * dt;
-    b.life -= dt;
-    let dead = b.life <= 0;
-    if (!dead && b.from === 'player') {
-      for (const g of world.gang) {
-        if (g.hp > 0 && segHits(b, nx, ny, g)) {
-          g.hp -= 1; dead = true;
-          world.combat.particles.push({ x: g.x, y: g.y, t: 0.35, color: '#e84e3a' });
-          break;
+
+  const sub = 3, sdt = dt / sub;
+  for (let s = 0; s < sub; s++) {
+    for (const b of [...world.bullets]) {
+      b.x += b.vx * sdt; b.y += b.vy * sdt; b.life -= sdt;
+      let dead = b.life <= 0;
+      if (!dead && b.from === 'player') {
+        for (const g of [...world.gang]) {
+          if (Math.hypot(g.x - b.x, g.y - b.y) < 13) { hurtGang(world, g, b.damage, events); dead = true; break; }
+        }
+        if (!dead) for (const f of world.footCops) {
+          if (f.hp > 0 && Math.hypot(f.x - b.x, f.y - b.y) < 13) { f.hp -= b.damage; addHeat(world, 40); dead = true; break; }
+        }
+        if (!dead) for (const c of world.cops) {
+          if (Math.hypot(c.x - b.x, c.y - b.y) < 24) { c.hp -= b.damage; dead = true; break; }
+        }
+      } else if (!dead && b.from === 'gang') {
+        const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
+        const rr = p.car ? 24 : 13;
+        if (Math.hypot(px - b.x, py - b.y) < rr) {
+          if (p.car) { p.car.hp -= b.damage * 0.4; world.missionDamage += b.damage * 0.4; }
+          else damagePlayer(world, b.damage * 0.55);
+          dead = true;
         }
       }
+      if (dead) world.bullets.splice(world.bullets.indexOf(b), 1);
     }
-    if (!dead) { b.x = nx; b.y = ny; keep.push(b); }
   }
-  world.combat.bullets = keep;
-  // Gang shoves toward Rex and brawls when close.
-  for (const g of world.gang) {
-    if (g.hp <= 0) continue;
-    const d = Math.hypot(p.x - g.x, p.y - g.y);
-    if (g.flee) { g.x -= (p.x - g.x) / (d || 1) * g.speed * dt; g.y -= (p.y - g.y) / (d || 1) * g.speed * dt; }
-    else if (d > 26) { g.x += (p.x - g.x) / d * g.speed * dt; g.y += (p.y - g.y) / d * g.speed * dt; }
-    else p.hp -= dt * 7;
-  }
-  world.gang = world.gang.filter((g) => g.hp > 0);
-  for (const pt of world.combat.particles) pt.t -= dt;
-  world.combat.particles = world.combat.particles.filter((pt) => pt.t > 0);
-  for (const tr of world.combat.tracers) tr.t -= dt;
-  world.combat.tracers = world.combat.tracers.filter((tr) => tr.t > 0);
-}
 
-export function addTracer(world, x1, y1, x2, y2) {
-  world.combat.tracers.push({ x1, y1, x2, y2, t: 0.14 });
+  // Gang members shoot back at intervals when the player is close.
+  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
+  for (const g of world.gang) {
+    const d = Math.hypot(px - g.x, py - g.y);
+    g.angle = Math.atan2(py - g.y, px - g.x);
+    if (d > 120) { g.x += Math.cos(g.angle) * 55 * dt; g.y += Math.sin(g.angle) * 55 * dt; }
+    g.fireT -= dt;
+    if (d < 330 && g.fireT <= 0) {
+      g.fireT = 0.8 + world.rng() * 0.7;
+      const ang = g.angle + (world.rng() - 0.5) * 0.16;
+      world.bullets.push({ x: g.x, y: g.y, vx: Math.cos(ang) * 760, vy: Math.sin(ang) * 760, life: 0.5, from: 'gang', damage: 14 });
+    }
+  }
+  // Downed foot cops leave the response.
+  world.footCops = world.footCops.filter(f => f.hp > 0);
+  world.cops = world.cops.filter(c => c.hp > 25);
 }

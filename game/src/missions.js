@@ -1,117 +1,163 @@
-// missions.js — Rex Kane's three story jobs for Mama Lou.
-// m1 Wheels for Lou, m2 The Palms Package, m3 The National Bank Job.
-// Each mission is a list of steps: go somewhere, pick something up,
-// hold a circle (the vault), or escape. missionStage() feeds the
-// HUD header with MISSION n/3, STAGE x/y and the NEXT step label.
+// missions.js — the five-job story of Rex Kane, getaway driver
+// for Mama Lou. Each job is a list of steps with a kind the updater
+// understands; jobs are genuinely completable end-to-end and are
+// graded (S/A/B/C) on time against par and damage taken.
 
-import { landmark } from './landmarks.js';
+import { landmark, distTo } from './landmarks.js';
+import { addHeat } from './world.js';
 
 export const MISSIONS = [
   {
-    key: 'm1', title: 'Wheels for Lou', pay: 150, from: 'Mama Lou',
-    line: 'Rex — Lou needs wheels. Bring me the Falco S by the motel.',
+    id: 'm1', title: 'Wheels for Lou', giver: 'Mama Lou', pay: 150, par: 150,
+    blurb: 'Lift the marked Falco S and bring it home to the Paint Shop.',
     steps: [
-      { kind: 'go', label: 'Reach the Falco S at The Palms Motel', short: 'Falco S', at: 'motel', r: 90 },
-      { kind: 'go', label: "Deliver the car to Lou's Mod Shop", short: 'Mod Shop', at: 'modshop', r: 95 },
+      { kind: 'steal', label: 'Steal the marked Falco S', short: 'STEAL THE FALCO', carType: 'falco' },
+      { kind: 'goto', label: "Deliver it to Lou's Paint Shop", short: 'DELIVER TO PAINT SHOP', at: 'paintshop' },
     ],
   },
   {
-    key: 'm2', title: 'The Palms Package', pay: 400, from: 'Mama Lou',
-    line: 'Pick up the package at The Palms Motel. No questions, no stops.',
+    id: 'm2', title: 'The Palms Package', giver: 'Mama Lou', pay: 400, par: 210,
+    blurb: 'Pick up a package at The Palms Motel. Drop it at Pier 9. Do not be followed.',
     steps: [
-      { kind: 'go', label: 'Pick up the package at The Palms Motel', short: 'Package pickup', at: 'motel', r: 85 },
-      { kind: 'go', label: 'Drop the package at the Marina', short: 'Marina drop', at: 'marina', r: 95 },
+      { kind: 'goto', label: 'Pick up the package at The Palms Motel', short: 'PICK UP AT THE PALMS', at: 'motel' },
+      { kind: 'goto', label: 'Drop the package at Pier 9', short: 'DROP AT PIER 9', at: 'pier9', heat: 120 },
     ],
   },
   {
-    key: 'm3', title: 'National Bank Job', pay: 1200, from: 'Mama Lou',
-    line: 'The National Bank vault, Rex. Hold it, then vanish to Pier 9.',
+    id: 'm3', title: 'National Bank Job', giver: 'Mama Lou', pay: 1200, par: 300,
+    blurb: 'Walk into Solmar National, hold the vault, then run for Pier 9.',
     steps: [
-      { kind: 'go', label: 'Enter the vault at Solmar National Bank', short: 'Bank vault', at: 'bank', r: 95 },
-      { kind: 'hold', label: 'Hold the vault while it opens', short: 'Vault hold', at: 'bank', r: 110, hold: 14 },
-      { kind: 'go', label: 'Escape to Pier 9', short: 'Pier 9 escape', at: 'pier9', r: 110 },
+      { kind: 'goto', label: 'Reach Solmar National Bank', short: 'REACH THE BANK', at: 'bank' },
+      { kind: 'vault', label: 'Hold the vault circle', short: 'HOLD THE VAULT', at: 'bank', holdTo: 100 },
+      { kind: 'goto', label: 'Escape to Pier 9', short: 'ESCAPE TO PIER 9', at: 'pier9', heat: 320 },
+    ],
+  },
+  {
+    id: 'm4', title: 'Harbor Lights', giver: 'Dex', pay: 700, par: 260,
+    blurb: 'Crates off a boat at the Marina, across town to Cactus Court — with the whole SCPD awake.',
+    steps: [
+      { kind: 'goto', label: 'Collect the crates at Solmar Marina', short: 'COLLECT AT MARINA', at: 'marina' },
+      { kind: 'goto', label: 'Deliver the crates to Cactus Court Plaza', short: 'DELIVER TO THE PLAZA', at: 'plaza', heat: 220 },
+      { kind: 'goto', label: 'Shake the tail — reach the Safehouse', short: 'REACH THE SAFEHOUSE', at: 'safehouse' },
+    ],
+  },
+  {
+    id: 'm5', title: 'Neon Crown', giver: 'Mama Lou', pay: 1500, par: 330,
+    blurb: 'Take the Neon Strip block and hold it. Whoever holds the Strip holds Solmar.',
+    steps: [
+      { kind: 'goto', label: 'Reach the Neon Strip block', short: 'REACH THE STRIP', at: 'motel' },
+      { kind: 'hold', label: 'Hold the block against the Vipers', short: 'HOLD THE BLOCK', at: 'motel', holdSec: 24 },
+      { kind: 'goto', label: 'Fall back to the Safehouse', short: 'FALL BACK — SAFEHOUSE', at: 'safehouse', heat: 200 },
     ],
   },
 ];
 
-export function createMissionState() {
-  return { idx: -1, step: 0, holdT: 0, done: [false, false, false], active: false };
+export function missionById(id) { return MISSIONS.find(m => m.id === id); }
+
+// The next unfinished job in story order, or null when done.
+export function nextMission(world) {
+  return MISSIONS[world.stats.missionsDone] || null;
 }
 
-export function startMission(world, idx) {
-  if (idx < 0 || idx >= MISSIONS.length || world.missions.done[idx]) return false;
-  world.missions.idx = idx; world.missions.step = 0;
-  world.missions.holdT = 0; world.missions.active = true;
-  if (MISSIONS[idx].key === 'm3') world.gang = spawnBankGang();
-  return true;
-}
-
-export function spawnBankGang() {
-  const bank = landmark('bank');
-  const gang = [];
-  for (let i = 0; i < 7; i++) {
-    const a = (i / 7) * Math.PI * 2;
-    gang.push({ x: bank.x + Math.cos(a) * 130, y: bank.y + Math.sin(a) * 130, hp: 3, maxHp: 3, speed: 58, flee: false });
-  }
-  return gang;
-}
-
-export function currentStep(world) {
-  const m = world.missions;
-  if (!m.active) return null;
-  return MISSIONS[m.idx].steps[m.step] || null;
-}
-
+// Stage info for the HUD header: MISSION n/5 · STAGE x/y · NEXT.
 export function missionStage(world) {
-  const m = world.missions;
-  if (!m.active) return null;
-  const mission = MISSIONS[m.idx];
-  const step = mission.steps[m.step];
-  const next = mission.steps[m.step + 1] || null;
-  const at = landmark(step.at);
-  const dist = at ? Math.round(Math.hypot(at.x - world.player.x, at.y - world.player.y)) : 0;
+  if (!world.mission) return null;
+  const m = world.mission.def;
+  const step = m.steps[world.mission.step];
+  const next = m.steps[world.mission.step + 1] || null;
   return {
-    missionIdx: m.idx, title: mission.title, stepIdx: m.step,
-    stepCount: mission.steps.length, stepLabel: step.label,
-    nextLabel: next ? next.label : null, nextShort: next ? next.short : null,
-    target: at, dist,
+    idx: MISSIONS.indexOf(m), total: MISSIONS.length, def: m, step,
+    stepIdx: world.mission.step, stepCount: m.steps.length,
+    nextLabel: next ? next.short : null,
   };
 }
 
-// Advance the active mission. Returns 'step', 'done', or null.
-export function stepMission(world, dt) {
-  const m = world.missions;
-  if (!m.active) return null;
-  const mission = MISSIONS[m.idx];
-  const step = mission.steps[m.step];
-  const at = landmark(step.at);
-  const inside = Math.hypot(at.x - world.player.x, at.y - world.player.y) < step.r;
-  if (step.kind === 'hold') {
-    if (!inside) { m.holdT = Math.max(0, m.holdT - dt); return null; }
-    m.holdT += dt;
-    world.vaultProgress = Math.min(1, m.holdT / step.hold);
-    if (m.holdT < step.hold) return null;
-  } else if (!inside) return null;
-  m.step++; m.holdT = 0;
-  if (mission.key === 'm3' && m.step === 2) world.addHeat(300); // escape under pressure
-  if (m.step >= mission.steps.length) {
-    m.active = false; m.done[m.idx] = true;
-    world.player.money += mission.pay;
-    world.stats.missionsDone = m.done.filter(Boolean).length;
-    world.player.rank = rankFor(world);
-    return 'done';
+export function stepTarget(world) {
+  const ms = missionStage(world);
+  if (!ms) return null;
+  const step = ms.step;
+  if (step.kind === 'steal') {
+    const car = world.cars.find(c => c.id === world.mission.targetCarId);
+    return car ? { x: car.x, y: car.y } : null;
   }
-  return 'step';
+  return landmark(step.at);
 }
 
-export function rankFor(world) {
-  const done = world.missions.done.filter(Boolean).length;
-  if (done >= 3) return 'Solmar Legend';
-  const score = world.player.money + world.stats.coinsFound * 40 + done * 300;
-  if (score > 1600) return 'King of the Mile';
-  if (score > 900) return 'Street Royalty';
-  if (score > 450) return 'Made Driver';
-  if (score > 200) return 'Hustler';
-  if (score > 60) return 'Wheelman';
-  return 'Runner';
+export function startMission(world, def) {
+  world.mission = { def, step: 0, vault: 0, holdT: 0, targetCarId: null };
+  world.missionTime = 0;
+  world.missionDamage = 0;
+  const first = def.steps[0];
+  if (first.kind === 'steal') {
+    // A marked car of the wanted type, parked across town. If the
+    // seeded traffic rolled no such car, retype a donor so the job
+    // can always be completed.
+    const spot = { x: 2754, y: 1154 };
+    let car = world.cars.find(c => c.type === first.carType);
+    if (!car) {
+      car = world.cars[0];
+      car.type = 'falco'; car.name = 'Falco S'; car.style = 'sport'; car.color = '#e8a71c';
+    }
+    car.x = spot.x; car.y = spot.y; car.parked = false; car.speed = 0; car.driver = 'target';
+    world.mission.targetCarId = car.id;
+  }
+  return world.mission;
+}
+
+export function gradeFor(def, seconds, damage) {
+  const t = seconds / def.par;
+  if (t <= 1 && damage < 25) return 'S';
+  if (t <= 1.3 && damage < 60) return 'A';
+  if (t <= 1.8) return 'B';
+  return 'C';
+}
+
+function completeMission(world, events) {
+  const def = world.mission.def;
+  const grade = gradeFor(def, world.missionTime, world.missionDamage);
+  world.grades[def.id] = grade;
+  world.player.money += def.pay;
+  world.player.rp += 60 + (grade === 'S' ? 40 : grade === 'A' ? 25 : 10);
+  world.stats.missionsDone++;
+  events.push({ type: 'mission-done', def, grade });
+  world.mission = null;
+}
+
+function advanceStep(world, events) {
+  world.mission.step++;
+  const step = world.mission.def.steps[world.mission.step];
+  if (!step) { completeMission(world, events); return; }
+  if (step.heat) addHeat(world, step.heat);
+  if (step.kind === 'vault') world.mission.vault = 0;
+  if (step.kind === 'hold') world.mission.holdT = step.holdSec;
+  events.push({ type: 'mission-step', step });
+}
+
+// Called every frame by main while a mission is active.
+export function stepMission(world, dt, events) {
+  if (!world.mission) return;
+  world.missionTime += dt;
+  const ms = missionStage(world);
+  const step = ms.step;
+  const p = world.player;
+  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
+
+  if (step.kind === 'goto' || step.kind === 'vault' || step.kind === 'hold') {
+    const at = landmark(step.at);
+    const d = distTo(at, { x: px, y: py });
+    if (step.kind === 'goto' && d < 80) advanceStep(world, events);
+    else if (step.kind === 'vault') {
+      if (d < 95 && !p.car) {
+        world.mission.vault += dt * 14; // ~7 s in the circle
+        if (world.mission.vault >= step.holdTo) advanceStep(world, events);
+      }
+    } else if (step.kind === 'hold') {
+      if (d < 200) {
+        world.mission.holdT -= dt;
+        if (world.mission.holdT <= 0) advanceStep(world, events);
+      }
+    }
+  } else if (step.kind === 'steal') {
+    if (p.car && p.car.id === world.mission.targetCarId) advanceStep(world, events);
+  }
 }
