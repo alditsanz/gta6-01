@@ -1,346 +1,162 @@
-// main.js — boot, the frame loop, and the state machine.
-// One job: wire input/world/render/audio together. States: title,
-// play, pause (the map & record screen), modshop, wasted, busted.
-// With ?shot=<name> it instead holds one staged frame perfectly
-// still for the entry screenshots.
+// main.js — the game loop and glue: player movement and driving,
+// near misses, paint shop, save/load, screen states, and the
+// screenshot mode (?shot=<name>) used to capture judge stills.
 
-import { dist } from './config.js';
-import { createInput } from './input.js';
-import {
-  createWorld, stepWorld, driveCar, moveOnFoot, addHeat,
-} from './world.js';
-import { renderFrame, cameraFor } from './render.js';
-import { AudioSys } from './audio.js';
-import { SHOT_NAMES, stageShot } from './shots.js';
-import { startStory, stepMissions, notice } from './missions.js';
-import { playerShoot, playerReload, playerPunch, stepCombat, spawnGang } from './combat.js';
-import { raceAt, startRace, stepRaces } from './races.js';
-import { acceptFare, startDelivery, stepSidejobs } from './sidejobs.js';
-import { stepTurf } from './turf.js';
+import { createWorld, stepPolice, stepTraffic, districtAt, nearestCar, enterCar, exitCar, damageCar, serializeWorld, restoreWorld, addHeat, starsOf } from './world.js';
+import { createInput, moveAxis } from './input.js';
+import { drawWorld, drawHUD, drawTitle, drawMapScreen, drawWasted, drawModShop } from './render.js';
+import { startMission, stepMission } from './missions.js';
+import { shoot, reload, punch, stepCombat } from './combat.js';
 import { stepCollectibles } from './collectibles.js';
-import { buyMod, MOD_TRACKS } from './modshop.js';
-import { cycleRadio } from './radio.js';
-import { landmarkById, nearestLandmark } from './landmarks.js';
+import { offerFare, stepFare, startDelivery, stepDelivery } from './sidejobs.js';
+import { startRace, stepRace } from './races.js';
+import { stepTurf, startChallenge, zoneAt, turfIncome } from './turf.js';
+import { buyMod, speedBonus, armorFactor, tireGrip } from './modshop.js';
+import { stepWeather, gripFactor } from './weather.js';
+import { nextStation } from './radio.js';
+import { createAudio } from './audio.js';
+import { stageShot } from './shots.js';
+import { landmark } from './landmarks.js';
+import { WORLD_SIZE } from './config.js';
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const input = createInput(canvas);
-const audio = new AudioSys();
-const SEED = 20261121;
+const SAVE_KEY = 'solmar-heat-save-v13';
 
-// ------------------------------------------------------------ save/load
+export function createGame(canvas, opts) {
+  const shot = opts && opts.shot;
+  const world = shot ? stageShot(shot) : createWorld(20261121);
+  if (!shot) {
+    try { const raw = localStorage.getItem(SAVE_KEY); if (raw) restoreWorld(world, raw); } catch { /* fresh start */ }
+    startMission(world, firstOpen(world));
+    offerFare(world);
+  }
+  let state = world.gameState || (shot ? 'shot' : 'title');
+  const input = createInput();
+  const audio = createAudio();
+  let last = 0; let incomeT = 0;
 
-const SAVE_KEY = 'solmarheat-save-v1';
+  function firstOpen(w) { return w.missions.done.findIndex((d) => !d); }
 
-function saveGame(world) {
-  try {
+  function save() {
+    try { localStorage.setItem(SAVE_KEY, serializeWorld(world)); } catch { /* storage off */ }
+  }
+
+  function respawn(busted) {
+    const at = landmark(busted ? 'hq' : 'hospital');
+    world.player.x = at.x + 60; world.player.y = at.y + 60;
+    world.player.hp = 100; world.player.car = null;
+    world.heat = 0; world.cops = []; world.footCops = []; world.heli = null; world.roadblock = null;
+    if (busted) world.player.money = Math.max(0, world.player.money - 100);
+    state = 'play';
+  }
+
+  function step(dt) {
+    world.time += dt; world.stats.playTime += dt;
+    stepWeather(world, dt);
+    world.radioT += dt;
+    if (world.radioT > 24) { world.radioT = 0; nextStation(world); }
     const p = world.player;
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
-      money: p.money, score: p.score, rank: p.rank,
-      carsStolen: p.carsStolen, fares: p.fares, deliveries: p.deliveries,
-      nearMisses: p.nearMisses, shots: p.shots,
-      missionIdx: world.mission ? world.mission.idx : 0,
-      storyDone: world.storyDone, raceWins: world.raceWins,
-      coins: world.coins.map((c) => c.taken),
-      turf: world.turf.zones.map((z) => z.owner),
-      mods: world.mods,
-    }));
-    world.saveExists = true;
-  } catch { /* storage unavailable — play on unsaved */ }
-}
-
-function loadGame(world) {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return;
-    const s = JSON.parse(raw);
-    const p = world.player;
-    p.money = s.money ?? p.money;
-    p.score = s.score ?? 0;
-    p.rank = s.rank ?? p.rank;
-    p.carsStolen = s.carsStolen ?? 0;
-    p.fares = s.fares ?? 0;
-    p.deliveries = s.deliveries ?? 0;
-    p.nearMisses = s.nearMisses ?? 0;
-    p.shots = s.shots ?? 0;
-    world.storyDone = !!s.storyDone;
-    world.raceWins = s.raceWins ?? 0;
-    if (Array.isArray(s.coins)) s.coins.forEach((t, i) => { if (world.coins[i]) world.coins[i].taken = !!t; });
-    if (Array.isArray(s.turf)) s.turf.forEach((o, i) => {
-      if (world.turf.zones[i]) {
-        world.turf.zones[i].owner = o;
-        if (o === 'Player') world.turf.zones[i].color = '#59c2e8';
-      }
-    });
-    if (s.mods) world.mods = { engine: s.mods.engine | 0, armor: s.mods.armor | 0, tires: s.mods.tires | 0 };
-    world.mission = { idx: Math.min(3, s.missionIdx | 0), step: 0, vaultT: 0, started: true };
-    world.saveExists = true;
-  } catch { /* corrupt save — start fresh */ }
-}
-
-// ------------------------------------------------------------ boot
-
-const params = new URLSearchParams(location.search);
-const shotName = params.get('shot');
-let world;
-let state;
-
-if (shotName && SHOT_NAMES.includes(shotName)) {
-  world = stageShot(shotName);
-  state = shotName === 'title' ? 'title' : shotName === 'map' ? 'pause' : 'play';
-  renderFrame(ctx, world, state);
-  // Hold the staged scene perfectly still.
-  const hold = () => { renderFrame(ctx, world, state); requestAnimationFrame(hold); };
-  requestAnimationFrame(hold);
-} else {
-  world = createWorld(SEED);
-  loadGame(world);
-  state = 'title';
-  requestAnimationFrame(frame);
-}
-
-// Debug/testing hook: the headless play-test reads live state here.
-window.__solmar = { get world() { return world; }, get state() { return state; } };
-
-// ------------------------------------------------------------ play
-
-let saveTimer = 0;
-let paintCd = 0;
-
-function mouseWorld() {
-  const cam = cameraFor(world);
-  return { x: input.mouse.x + cam.x, y: input.mouse.y + cam.y };
-}
-
-function stepOnFoot(dt) {
-  const p = world.player;
-  let mx = 0, my = 0;
-  if (input.down('KeyW') || input.down('ArrowUp')) my -= 1;
-  if (input.down('KeyS') || input.down('ArrowDown')) my += 1;
-  if (input.down('KeyA') || input.down('ArrowLeft')) mx -= 1;
-  if (input.down('KeyD') || input.down('ArrowRight')) mx += 1;
-  const sprint = input.down('ShiftLeft') || input.down('ShiftRight');
-  const sp = sprint ? 198 : 132;
-  if (mx !== 0 || my !== 0) {
-    const len = Math.hypot(mx, my);
-    p.angle = Math.atan2(my, mx);
-    moveOnFoot(world, p, (mx / len) * sp, (my / len) * sp, dt, 10);
-    p.walk += dt * (sprint ? 13 : 10);
-  }
-  if (input.mouse.down) {
-    const m = mouseWorld();
-    if (playerShoot(world, m.x, m.y)) audio.shot();
-    p.angle = Math.atan2(m.y - p.y, m.x - p.x);
-  }
-  if (input.hit('KeyF')) { if (playerPunch(world)) audio.punch(); }
-  if (input.hit('KeyR')) playerReload(world);
-}
-
-function stepDriving(dt) {
-  const p = world.player;
-  const car = p.car;
-  const ctl = {
-    throttle: (input.down('KeyW') || input.down('ArrowUp')) ? 1 : (input.down('KeyS') || input.down('ArrowDown')) ? -1 : 0,
-    steer: (input.down('KeyA') || input.down('ArrowLeft')) ? -1 : (input.down('KeyD') || input.down('ArrowRight')) ? 1 : 0,
-    brake: input.down('Space'),
-  };
-  const impact = driveCar(world, car, dt, ctl);
-  if (impact > 0) {
-    audio.crash();
-    if (impact > 130) addHeat(world, 12);
-  }
-  p.x = car.x; p.y = car.y; p.angle = car.angle;
-
-  // Near misses: threading past traffic at speed.
-  if (Math.abs(car.speed) > 100) {
-    for (const other of world.cars) {
-      if (other === car || other.driver !== 'traffic' || other.nearMissCd > 0) continue;
-      const d = dist(car.x, car.y, other.x, other.y);
-      if (d > 20 && d < 42) {
-        other.nearMissCd = 1.5;
-        p.money += 15;
-        p.score += 15;
-        p.nearMisses += 1;
-        audio.nearMiss();
-        world.floaters.push({ x: car.x, y: car.y - 22, text: '+$15 NEAR MISS', t: 0.9, color: '#b8e6ff' });
-      }
-    }
-  }
-
-  // Lou's Paint Shop: roll in, roll out clean and repaired.
-  const paint = landmarkById('paint');
-  if (paintCd > 0) paintCd -= dt;
-  if (paintCd <= 0 && dist(p.x, p.y, paint.x, paint.y) < 58 && (world.heat > 0 || car.hp < 100)) {
-    const cost = Math.min(100, p.money);
-    p.money -= cost;
-    world.heat = 0;
-    world.wanted = 0;
-    car.hp = 100;
-    car.wrecked = false;
-    paintCd = 4;
-    notice(world, 'REPAINTED', `Heat cleared, body repaired — $${cost}`, 2.2);
-    audio.pickup();
-  }
-}
-
-function enterExitCar() {
-  const p = world.player;
-  if (p.car) {
-    const car = p.car;
-    car.driver = 'parked';
-    p.car = null;
-    p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 30;
-    p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 30;
-    return;
-  }
-  let best = null, bestD = 48;
-  for (const car of world.cars) {
-    if (car.wrecked || car.driver === 'cop') continue;
-    if (car.driver === 'traffic' && Math.abs(car.speed) > 42) continue;
-    const d = dist(p.x, p.y, car.x, car.y);
-    if (d < bestD) { bestD = d; best = car; }
-  }
-  if (best) {
-    best.driver = 'player';
-    p.car = best;
-    p.x = best.x; p.y = best.y; p.angle = best.angle;
-    if (!best.stolen) {
-      best.stolen = true;
-      p.carsStolen += 1;
-      addHeat(world, 55);
-    }
-    audio.ui();
-  }
-}
-
-function updatePrompt() {
-  const p = world.player;
-  world.prompt = null;
-  if (p.car) {
-    const ri = raceAt(world);
-    if (ri >= 0) world.prompt = `R — Start the race at this flag`;
-    else if (world.farePed && dist(p.x, p.y, world.farePed.x, world.farePed.y) < 90) {
-      world.prompt = 'T — Pick up the taxi fare';
-    }
-  } else {
-    const near = nearestLandmark(p.x, p.y, 74);
-    if (near && near.id === 'modshop') world.prompt = "E — Lou's Mod Shop";
-    else if (dist(p.x, p.y, 1020, 1020) < 60 && !world.delivery) world.prompt = 'R — Take a delivery job';
-    else {
-      // nearest enterable car?
-      for (const car of world.cars) {
-        if (!car.wrecked && car.driver !== 'cop' && dist(p.x, p.y, car.x, car.y) < 48) {
-          world.prompt = `E — Drive the ${car.name}`;
-          break;
+    const ax = moveAxis(input.keys);
+    if (p.car) {
+      const grip = gripFactor(world) * tireGrip(p.mods);
+      const top = p.car.topSpeed * speedBonus(p.mods);
+      if (ax.y < 0) p.car.speed = Math.min(top, (p.car.speed || 0) + 190 * grip * dt);
+      else if (ax.y > 0) p.car.speed = Math.max(-70, (p.car.speed || 0) - 150 * dt);
+      else p.car.speed = (p.car.speed || 0) * (1 - 0.6 * dt);
+      if (input.keys.Space) p.car.speed *= 1 - 3.2 * dt;
+      const steer = ax.x * (0.9 + Math.abs(p.car.speed) / 300);
+      if (p.car.speed) p.car.angle += steer * dt * Math.sign(p.car.speed);
+      p.x += Math.cos(p.car.angle) * p.car.speed * dt;
+      p.y += Math.sin(p.car.angle) * p.car.speed * dt;
+      // Near miss: fast pass close to a moving traffic car.
+      p.nearMissCd -= dt;
+      if (Math.abs(p.car.speed) > 150 && p.nearMissCd <= 0) {
+        for (const c of world.cars) {
+          if (c !== p.car && !c.parked && Math.hypot(c.x - p.x, c.y - p.y) < 52) {
+            p.money += 15; world.stats.nearMisses++; p.nearMissCd = 1.5; audio.whoosh(); break;
+          }
         }
       }
+      // Paint shop: clears heat, repairs the car.
+      const paint = landmark('paint');
+      if (Math.hypot(paint.x - p.x, paint.y - p.y) < 95 && world.heat > 0) { world.heat = 0; p.car.hp = 100; }
+    } else {
+      const sp = (input.keys.ShiftLeft ? 175 : 118);
+      p.x += ax.x * sp * dt; p.y += ax.y * sp * dt;
+      if (ax.x || ax.y) p.angle = Math.atan2(ax.y, ax.x);
     }
+    p.x = Math.max(24, Math.min(WORLD_SIZE - 24, p.x));
+    p.y = Math.max(24, Math.min(WORLD_SIZE - 24, p.y));
+    if (p.car) { p.car.x = p.x; p.car.y = p.y; }
+
+    stepTraffic(world, dt);
+    stepPolice(world, dt);
+    stepCombat(world, dt);
+    stepCollectibles(world);
+    stepMission(world, dt);
+    stepFare(world);
+    stepDelivery(world, dt);
+    stepRace(world, dt);
+    stepTurf(world, dt);
+    incomeT += dt;
+    if (incomeT >= 10) { incomeT = 0; p.money += turfIncome(world); p.score += 5; }
+    if (input.wasPressed('KeyQ')) nextStation(world);
+    if (input.wasPressed('KeyE')) {
+      if (p.car) exitCar(world);
+      else { const c = nearestCar(world, 62); if (c && enterCar(world, c)) audio.crash; }
+    }
+    if (input.wasPressed('KeyT')) { offerFare(world); if (!world.side.delivery) startDelivery(world); }
+    if (input.wasPressed('KeyG')) { const z = zoneAt(world, p.x, p.y); if (z) startChallenge(world, z); }
+    if (input.wasPressed('KeyR')) reload(world);
+    if (input.wasPressed('KeyF')) punch(world);
+    if (input.mouse.down && !p.car) shoot(world, p.x + (input.mouse.x - 640), p.y + (input.mouse.y - 360));
+    if (p.hp <= 0) { state = 'wasted'; setTimeout(() => respawn(false), 900); }
+    if (starsOf(world) >= 3 && world.footCops.some((f) => Math.hypot(f.x - p.x, f.y - p.y) < 18) && !p.car) { state = 'busted'; setTimeout(() => respawn(true), 900); }
+    save();
   }
+
+  function frame(ts) {
+    const dt = Math.min(0.05, (ts - last) / 1000 || 0.016); last = ts;
+    const ctx = canvas.getContext('2d');
+    const vw = canvas.width; const vh = canvas.height;
+    if (state === 'play') step(dt);
+    const p = world.player;
+    const camX = Math.max(0, Math.min(WORLD_SIZE - vw, p.x - vw / 2));
+    const camY = Math.max(0, Math.min(WORLD_SIZE - vh, p.y - vh / 2));
+    drawWorld(ctx, world, camX, camY, vw, vh);
+    if (state === 'title') drawTitle(ctx, world, vw, vh);
+    else if (state === 'pause') drawMapScreen(ctx, world, vw, vh);
+    else if (state === 'shop') drawModShop(ctx, world, vw, vh);
+    else if (state === 'wasted') drawWasted(ctx, world, vw, vh, false);
+    else if (state === 'busted') drawWasted(ctx, world, vw, vh, true);
+    else { drawHUD(ctx, world, vw, vh); if (state === 'shot' && world.gameState === 'pause') drawMapScreen(ctx, world, vw, vh); if (state === 'shot' && world.gameState === 'title') drawTitle(ctx, world, vw, vh); }
+    input.clearPressed();
+    requestAnimationFrame(frame);
+  }
+
+  if (typeof window !== 'undefined') {
+    input.attach(window, canvas);
+    window.addEventListener('keydown', (e) => {
+      if (state === 'title' && (e.code === 'Enter' || e.code === 'Space')) state = 'play';
+      if ((state === 'play' || state === 'pause') && (e.code === 'KeyP' || e.code === 'Escape')) state = state === 'play' ? 'pause' : 'play';
+      if (e.code === 'KeyM') audio.toggleMute();
+      if (e.code === 'KeyB') { const d = Math.hypot(landmark('modshop').x - world.player.x, landmark('modshop').y - world.player.y); if (d < 130) state = 'shop'; }
+      if (state === 'shop') {
+        if (e.code === 'Digit1') buyMod(world, 'engine');
+        if (e.code === 'Digit2') buyMod(world, 'armor');
+        if (e.code === 'Digit3') buyMod(world, 'tires');
+        if (e.code === 'Escape') state = 'play';
+      }
+      if (e.code === 'Digit1' && state === 'play' && !world.missions.active) startMission(world, 0);
+      if (e.code === 'Digit2' && state === 'play' && !world.missions.active) startMission(world, 1);
+      if (e.code === 'Digit3' && state === 'play' && !world.missions.active) startMission(world, 2);
+    });
+    requestAnimationFrame(frame);
+  }
+  return { world, getState: () => state, districtAt };
 }
 
-function stepPlay(dt) {
-  const p = world.player;
-  if (input.hit('KeyP') || input.hit('Escape')) { state = 'pause'; return; }
-  if (input.hit('KeyM')) audio.muted = !audio.muted;
-  if (input.hit('KeyQ')) cycleRadio(world);
-
-  if (p.car) stepDriving(dt);
-  else stepOnFoot(dt);
-
-  if (input.hit('KeyE')) {
-    const near = !p.car ? nearestLandmark(p.x, p.y, 74) : null;
-    if (near && near.id === 'modshop') { state = 'modshop'; audio.ui(); }
-    else enterExitCar();
-  }
-  if (input.hit('KeyT')) { if (acceptFare(world)) audio.ui(); }
-  if (input.hit('KeyR')) {
-    if (p.car) {
-      const ri = raceAt(world);
-      if (ri >= 0) startRace(world, ri);
-    } else if (dist(p.x, p.y, 1020, 1020) < 60 && !world.delivery) {
-      if (startDelivery(world)) audio.ui();
-    }
-  }
-  updatePrompt();
-
-  if (p.car) {
-    world.radioT += dt;
-    if (world.radioT > 24) { world.radioT = 0; cycleRadio(world); }
-  }
-
-  stepWorld(world, dt);
-  stepMissions(world, dt);
-  stepRaces(world, dt);
-  stepSidejobs(world, dt);
-  const tev = stepTurf(world, dt);
-  if (tev === 'wave' && world.turf.active >= 0) {
-    const z = world.turf.zones[world.turf.active];
-    spawnGang(world, z.x, z.y, 3, 26);
-    addHeat(world, 20);
-  }
-  if (tev === 'captured') {
-    audio.passed();
-    notice(world, 'TURF TAKEN', 'The zone flies your colours now', 2.6);
-  }
-  const cev = stepCollectibles(world, dt);
-  if (cev === 'coin') audio.coin();
-  else if (cev) audio.pickup();
-  stepCombat(world, dt);
-  audio.step(world, dt);
-
-  if (p.hp <= 0) state = 'wasted';
-  else if (world.bust >= 1) state = 'busted';
-
-  saveTimer += dt;
-  if (saveTimer > 4) { saveTimer = 0; saveGame(world); }
-}
-
-function respawn(kind) {
-  const p = world.player;
-  const spot = kind === 'wasted' ? landmarkById('hospital') : landmarkById('hq');
-  if (p.car) { p.car.driver = 'parked'; p.car = null; }
-  p.x = spot.x + 30; p.y = spot.y + 46;
-  p.hp = 100;
-  p.armor = 0;
-  p.money = Math.max(0, p.money - (kind === 'wasted' ? 150 : 200));
-  world.heat = 0;
-  world.wanted = 0;
-  world.bust = 0;
-  world.gang.length = 0;
-  state = 'play';
-}
-
-// ------------------------------------------------------------ loop
-
-let last = 0;
-function frame(now) {
-  const dt = Math.min(0.033, last ? (now - last) / 1000 : 0.016);
-  last = now;
-
-  if (state === 'title') {
-    world.time += dt;
-    stepWorld(world, dt); // the city lives behind the title
-    if (input.hit('Enter') || input.mouse.clicked) {
-      audio.ensure();
-      startStory(world);
-      state = 'play';
-    }
-  } else if (state === 'play') {
-    stepPlay(dt);
-  } else if (state === 'pause') {
-    if (input.hit('KeyP') || input.hit('Escape') || input.hit('Enter')) state = 'play';
-  } else if (state === 'modshop') {
-    if (input.hit('Escape') || input.hit('KeyP')) state = 'play';
-    else {
-      MOD_TRACKS.forEach((t, i) => {
-        if (input.hit(`Digit${i + 1}`)) { if (buyMod(world, t.key)) audio.passed(); else audio.ui(); }
-      });
-    }
-  } else if (state === 'wasted' || state === 'busted') {
-    if (input.hit('Enter')) respawn(state);
-  }
-
-  renderFrame(ctx, world, state);
-  input.endFrame();
-  requestAnimationFrame(frame);
+if (typeof document !== 'undefined') {
+  const canvas = document.getElementById('game');
+  const params = new URLSearchParams(location.search);
+  createGame(canvas, { shot: params.get('shot') || null });
 }

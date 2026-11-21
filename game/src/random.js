@@ -1,34 +1,26 @@
-// random.js — deterministic seeded randomness.
-// One job: a mulberry32 generator plus convenience picks, so a world
-// built from a seed is byte-for-byte reproducible. No Math.random
-// anywhere in the game; everything flows through one of these.
+// random.js — deterministic seeded randomness for Solmar Heat.
+// Every random choice in the world, props and screenshot paths flows
+// through a generator built here, so a seed always rebuilds the same
+// city. Nothing in the game logic touches the host's global random.
 
 export function makeRng(seed) {
   let state = (seed >>> 0) || 1;
-  const rng = function () {
-    state |= 0;
-    state = (state + 0x6D2B79F5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  const next = () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  // Float in [a, b).
-  rng.range = (a, b) => a + rng() * (b - a);
-  // Integer in [a, b] inclusive.
-  rng.int = (a, b) => a + Math.floor(rng() * (b - a + 1));
-  // True with probability p.
-  rng.chance = (p) => rng() < p;
-  // One element of arr.
-  rng.pick = (arr) => arr[Math.floor(rng() * arr.length)];
-  return rng;
+  next.int = (lo, hi) => lo + Math.floor(next() * (hi - lo + 1));
+  next.range = (lo, hi) => lo + next() * (hi - lo);
+  next.pick = (arr) => arr[Math.floor(next() * arr.length)];
+  next.chance = (p) => next() < p;
+  return next;
 }
 
-// Stable 2D hash -> [0, 1). Used for per-block / per-building variety
-// that must not consume the world rng stream (render-time variation).
 export function hash2(a, b) {
-  let h = Math.imul(a + 0x9E3779B9, 0x85EBCA6B) ^ Math.imul(b + 0xC2B2AE35, 0x27D4EB2F);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0x165667B1);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
+  let h = Math.imul(a + 101, 374761393) ^ Math.imul(b + 57, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }

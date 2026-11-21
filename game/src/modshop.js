@@ -1,39 +1,38 @@
-// modshop.js — Lou's Mod Shop: engine / armor / tires upgrades.
-// One job: hold the upgrade catalogue (3 tracks x 3 levels, priced),
-// apply purchases, and expose the performance multipliers the car
-// physics reads. Mods belong to the player, not to one car.
+// modshop.js — Lou's Mod Shop: engine, armor and tires, three
+// levels each. Levels live on the player, persist in the autosave,
+// and feed the car's top speed, damage taken and grip.
 
 export const MOD_TRACKS = [
-  { key: 'engine', name: 'Engine', blurb: 'Top speed + acceleration', costs: [150, 300, 550] },
-  { key: 'armor', name: 'Armor', blurb: 'Tougher body, less crash damage', costs: [200, 350, 600] },
-  { key: 'tires', name: 'Tires', blurb: 'Grip in corners and in rain', costs: [120, 260, 480] },
+  { key: 'engine', name: 'Engine', base: 120, desc: 'Top speed' },
+  { key: 'armor', name: 'Armor', base: 150, desc: 'Damage resist' },
+  { key: 'tires', name: 'Tires', base: 90, desc: 'Grip' },
 ];
+export const MAX_LEVEL = 3;
 
-export function makeMods() {
+export function createMods() {
   return { engine: 0, armor: 0, tires: 0 };
 }
 
-export function modsBought(mods) {
-  return mods.engine + mods.armor + mods.tires;
+export function modCost(track, level) {
+  const t = MOD_TRACKS.find((m) => m.key === track);
+  return t ? t.base * (level + 1) : Infinity;
 }
 
-export function nextCost(mods, key) {
-  const track = MOD_TRACKS.find((t) => t.key === key);
-  const lvl = mods[key];
-  return lvl >= 3 ? null : track.costs[lvl];
-}
-
-// Try to buy the next level of a track. Returns true on success.
-export function buyMod(world, key) {
-  const cost = nextCost(world.mods, key);
-  if (cost === null) return false;
+export function buyMod(world, track) {
+  const lvl = world.player.mods[track];
+  if (lvl === undefined || lvl >= MAX_LEVEL) return false;
+  const cost = modCost(track, lvl);
   if (world.player.money < cost) return false;
   world.player.money -= cost;
-  world.mods[key] += 1;
+  world.player.mods[track] = lvl + 1;
+  world.stats.modsBought++;
   return true;
 }
 
-// Multipliers read by the driving physics in world.js.
-export function engineFactor(mods) { return 1 + mods.engine * 0.09; }
-export function armorFactor(mods) { return 1 - mods.armor * 0.18; } // damage taken
-export function tireFactor(mods) { return 1 + mods.tires * 0.07; }
+export function modsBought(mods) {
+  return MOD_TRACKS.reduce((n, t) => n + (mods[t.key] || 0), 0);
+}
+
+export function speedBonus(mods) { return 1 + 0.12 * (mods.engine || 0); }
+export function armorFactor(mods) { return 1 - 0.18 * (mods.armor || 0); }
+export function tireGrip(mods) { return 1 + 0.1 * (mods.tires || 0); }

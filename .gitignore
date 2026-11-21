@@ -1,5 +1,5 @@
-output/
-out/
 node_modules/
+out/
+output/
 *.log
 .DS_Store

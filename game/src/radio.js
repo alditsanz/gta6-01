@@ -1,19 +1,17 @@
-// radio.js — the three Solmar radio stations.
-// One job: name the stations; the HUD shows the current one while the
-// player drives, main.js cycles world.radioIdx (Q key / every 24 s).
+// radio.js — Rex's three favourite stations. Pure data plus a
+// cycler; the HUD reads the current station while he is in a car.
 
 export const RADIO_STATIONS = [
-  'SOLMAR FM 98.1 — Coastal Gold',
-  'PALM WAVE 103.7 — Island Classics',
-  'NEON NIGHTS 88.4 — Strip Synth',
+  { freq: '98.1', name: 'SOLMAR FM 98.1 — Coastal Gold' },
+  { freq: '103.7', name: 'PALM WAVE 103.7 — Island Classics' },
+  { freq: '88.4', name: 'NEON NIGHTS 88.4 — Strip Synth' },
 ];
 
-export function stationName(world) {
-  const i = ((world.radioIdx % RADIO_STATIONS.length) + RADIO_STATIONS.length) % RADIO_STATIONS.length;
-  return RADIO_STATIONS[i];
+export function stationAt(idx) {
+  return RADIO_STATIONS[((idx % RADIO_STATIONS.length) + RADIO_STATIONS.length) % RADIO_STATIONS.length];
 }
 
-export function cycleRadio(world) {
+export function nextStation(world) {
   world.radioIdx = (world.radioIdx + 1) % RADIO_STATIONS.length;
-  return stationName(world);
+  return stationAt(world.radioIdx);
 }

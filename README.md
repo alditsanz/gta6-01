@@ -1,52 +1,41 @@
 # Solmar Heat
 
-[![gta6-01 bounty](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
-[![rank](https://make.fun/badge/gta6-01/alditsanz/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01)
-[![reward](https://make.fun/badge/gta6-01/alditsanz/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
+![gta6-01 bounty](https://make.fun/badge/gta6-01.svg)
+![rank](https://make.fun/badge/gta6-01/alditsanz/gta6-01/rank.svg)
+![reward](https://make.fun/badge/gta6-01/alditsanz/gta6-01/reward.svg)
 
-An original open-world crime game for the [make.fun gta6-01 bounty](https://make.fun/bounty/gta6-01).
-Welcome to **Solmar**, a sun-soaked coastal city of nine districts — steal cars,
-run from the SCPD, work for Mama Lou, and become a legend.
+An original top-down open-world crime game for the desktop browser,
+built for the [gta6-01 bounty on make.fun](https://make.fun/bounty/gta6-01).
+
+Rex Kane drives for Mama Lou in Solmar, a sun-soaked coastal city of
+nine districts on a 3600x3600 grid: three story jobs (Wheels for Lou,
+The Palms Package, the National Bank Job), a five-star SCPD response
+with cruisers, foot cops, roadblocks and a helicopter, street races,
+taxi fares, deliveries, turf wars, ten hidden Solmar coins, Lou's
+Mod Shop, weather and a day clock — all in plain JavaScript with a
+canvas renderer, no assets and no network.
 
 ## Play
 
-Open `game/index.html` in a desktop browser, or serve it locally:
+Open `game/index.html` in a browser, or serve it locally:
 
 ```
-node serve.ts        # then visit http://localhost:8321/
+node serve.ts   # then visit http://localhost:8077
 ```
 
-No build step, no network, no assets — everything is drawn and
-synthesized live by the game itself.
+WASD / arrows move and drive · E enter or exit a car · mouse aims,
+click shoots · R reload · F punch · T fare/delivery · G challenge
+turf · Q radio · B mod shop near Lou's · P pause/map · M mute.
 
-## The game
+## Build the dossier
 
-- **A living city** — 9 districts, 10 landmarks (Solmar National Bank,
-  The Palms Motel, Pier 9, Lou's Mod Shop…), traffic, pedestrians,
-  street props, day/night cycle and rolling weather.
-- **A story in 3 jobs** — *Wheels for Lou*, *The Palms Package* and the
-  *National Bank Job*, with dialogue from Mama Lou throughout.
-- **Wanted system** — 5 stars of SCPD response: pursuit cruisers, foot
-  cops, roadblocks at 4 stars and a helicopter with a searchlight at 5.
-- **Side work** — 3 street races, taxi fares, timed deliveries, turf
-  wars over 5 zones, 10 hidden Solmar coins, pickups.
-- **Lou's Mod Shop** — engine, armor and tires, 3 levels each.
-- **Combat** — mouse-aimed shooting with reloads, punches, and crews
-  that shoot back.
-- **Save** — progress saves automatically (localStorage).
+```
+MAKEFUN_OUTPUT_DIR=out node main.ts
+```
 
-## Controls
+`main.ts` copies `game/` and `screenshots/` into the output
+directory and writes `dossier.json` with the kit's `buildDossier`.
+It never deletes the output directory itself — it cleans the
+contents only, so it also runs inside the grader's sandbox.
 
-WASD / arrows move & drive · E enter/exit car · mouse aim, click shoot ·
-F punch · R reload · T taxi fare · Space handbrake · Shift sprint ·
-Q radio · M mute · P map & pause
-
-## Layout
-
-- `main.ts` — the entrypoint: copies `game/` + `screenshots/` to the
-  output directory and writes the dossier.
-- `game/src/` — one module per job: world, render, missions, combat,
-  police (in world), races, sidejobs, turf, modshop, collectibles,
-  weather, radio, props, shots, audio, input, landmarks, config, random.
-- `screenshots/` — four real renders of the game, taken by its own
-  staged-shot mode (`game/src/shots.js`).
+A wholly original game. No part of it comes from any commercial game.

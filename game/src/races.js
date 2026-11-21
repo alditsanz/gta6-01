@@ -1,77 +1,40 @@
-// races.js — three street races: checkpoint routes against par times.
-// One job: hold the route table, run the active race (timer, next
-// checkpoint, finish/fail), and pay out on a clean win.
-
-import { dist } from './config.js';
-import { notice, say } from './missions.js';
+// races.js — three street races, each a checkpoint route across
+// Solmar with a par time. Beat par to win; the payout scales with
+// the route's difficulty. A failed run can always be retried.
 
 export const RACES = [
-  {
-    name: 'Sunset Sprint', diff: 'Easy', par: 75, pay: 150,
-    start: { x: 400, y: 1050 },
-    checkpoints: [[400, 1800], [1200, 1800], [1200, 2600], [400, 2600]],
-  },
-  {
-    name: 'Canal Run', diff: 'Medium', par: 95, pay: 300,
-    start: { x: 2400, y: 650 },
-    checkpoints: [[2400, 1400], [3200, 1400], [3200, 2200], [2400, 2200], [2400, 3000]],
-  },
-  {
-    name: 'Pier 9 Grand Prix', diff: 'Hard', par: 120, pay: 600,
-    start: { x: 3200, y: 3350 },
-    checkpoints: [[3200, 2400], [2000, 2400], [2000, 1200], [800, 1200], [800, 400], [2000, 400]],
-  },
+  { key: 'coast', name: 'Coast Run', par: 75, pay: 150, start: [300, 3400], points: [[300, 3400], [1500, 3400], [2700, 3300], [3300, 2500]] },
+  { key: 'grid', name: 'Grid Runner', par: 95, pay: 300, start: [500, 500], points: [[500, 500], [1700, 900], [900, 2100], [2500, 2100], [2100, 500]] },
+  { key: 'heat', name: 'Heat Lap', par: 120, pay: 600, start: [3300, 300], points: [[3300, 300], [1900, 300], [700, 1300], [1900, 2300], [3300, 1900], [3300, 300]] },
 ];
 
-// Can a race be started here? Returns the race index or -1.
-export function raceAt(world) {
-  const p = world.player;
-  if (!p.car || world.race) return -1;
-  for (let i = 0; i < RACES.length; i++) {
-    if (dist(p.x, p.y, RACES[i].start.x, RACES[i].start.y) < 70) return i;
-  }
-  return -1;
+export function createRaceState() {
+  return { active: null, idx: 0, t: 0, done: {} };
 }
 
-export function startRace(world, idx) {
-  const r = RACES[idx];
-  world.race = { idx, cp: 0, t: 0, par: r.par };
-  notice(world, 'RACE STARTED', `${r.name} — beat ${r.par}s for $${r.pay}`, 2.4);
-  say(world, 'Flag Marshal', 'Checkpoints lit up on your map. Go, go, go!', 3);
+export function startRace(world, key) {
+  const race = RACES.find((r) => r.key === key);
+  if (!race || !world.player.car) return false;
+  world.race = { active: race, idx: 0, t: 0, done: world.race.done };
+  return true;
 }
 
-export function stepRaces(world, dt) {
-  const race = world.race;
-  if (!race) return;
-  const r = RACES[race.idx];
-  race.t += dt;
-  const cp = r.checkpoints[race.cp];
-  if (cp && dist(world.player.x, world.player.y, cp[0], cp[1]) < 78) {
-    race.cp += 1;
-    if (race.cp >= r.checkpoints.length) {
-      if (race.t <= race.par) {
-        world.player.money += r.pay;
-        world.player.score += r.pay;
-        world.raceWins += 1;
-        notice(world, 'RACE WON', `${r.name} in ${race.t.toFixed(1)}s  +$${r.pay}`, 3);
-      } else {
-        notice(world, 'RACE LOST', `${r.name} — par was ${r.par}s, you ran ${race.t.toFixed(1)}s`, 3);
-      }
-      world.race = null;
-      return;
+export function stepRace(world, dt) {
+  const st = world.race;
+  if (!st.active) return null;
+  st.t += dt;
+  const race = st.active;
+  if (st.t > race.par) { st.active = null; return 'failed'; }
+  const [tx, ty] = race.points[st.idx];
+  if (Math.hypot(tx - world.player.x, ty - world.player.y) < 90) {
+    st.idx++;
+    if (st.idx >= race.points.length) {
+      world.player.money += race.pay;
+      st.done[race.key] = true;
+      world.stats.racesWon = Object.keys(st.done).length;
+      st.active = null;
+      return 'won';
     }
   }
-  if (race.t > race.par + 45) {
-    notice(world, 'RACE OVER', `${r.name} — out of time. Line up and try again.`, 2.6);
-    world.race = null;
-  }
-}
-
-// The live checkpoint the HUD/minimap should point at, or null.
-export function raceTarget(world) {
-  if (!world.race) return null;
-  const r = RACES[world.race.idx];
-  const cp = r.checkpoints[world.race.cp];
-  if (!cp) return null;
-  return { x: cp[0], y: cp[1], label: `${r.name} — checkpoint ${world.race.cp + 1}/${r.checkpoints.length}` };
+  return null;
 }
