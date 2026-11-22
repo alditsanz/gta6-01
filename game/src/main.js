@@ -2,8 +2,8 @@
 // The game loop and the player's hands: driving, walking, stealing,
 // shooting, missions, side work, shops, save/load and the screens
 // (title / play / pause-map / mod shop / wasted / busted).
-// Screenshot mode (?shot=chase|vault|map|title) stages a scene via
-// shots.js, maps it to a screen state and holds it perfectly still.
+// Screenshot mode (?shot=chase|vault|map|title|victory) stages a
+// scene via shots.js, maps it to a screen state and holds it still.
 
 import { VIEW_W, VIEW_H, SAVE_KEY, DAY_LENGTH_SEC, PLAYER_FOOT_SPEED, PLAYER_SPRINT_SPEED, KMH_PER_UNIT } from './config.js';
 import { clamp, dist, angleTo } from './random.js';
@@ -22,7 +22,7 @@ import { startFare, stepFare, startDelivery, stepDelivery } from './sidejobs.js'
 import { startRace, stepRace, RACES } from './races.js';
 import { buyMod, usePaintShop } from './modshop.js';
 import { landmarkById, LANDMARKS } from './landmarks.js';
-import { drawWorld, drawScene, drawHUD, drawMapScreen, drawTitle, drawModShop, drawEndScreen } from './render.js';
+import { drawWorld, drawScene, drawHUD, drawMapScreen, drawTitle, drawVictory, drawModShop, drawEndScreen } from './render.js';
 import { stageShot } from './shots.js';
 
 const canvas = document.getElementById('game');
@@ -317,6 +317,9 @@ function handleEvent(ev) {
     dialogueSeq += 1; say(dialogueSeq);
     if (world.mission === null) world.flags.vaultRing = null;
     saveGame();
+    // The finale landing is the story-complete screen: the bank job
+    // done flag plus a full mission count means the book is closed.
+    if (world.flags.done_m5 && world.stats.missionsDone >= MISSIONS.length) gameState = 'victory';
   }
   else if (ev === 'mission-failed') flash('MISSION FAILED — TRY AGAIN (N)');
   else if (ev === 'turf-spawn') {
@@ -348,6 +351,9 @@ function draw() {
   } else if (gameState === 'pause') {
     drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
     drawMapScreen(ctx, world, VIEW_W, VIEW_H);
+  } else if (gameState === 'victory') {
+    drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
+    drawVictory(ctx, world, VIEW_W, VIEW_H);
   } else if (gameState === 'modshop') {
     drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
     drawModShop(ctx, world, VIEW_W, VIEW_H);
@@ -381,6 +387,13 @@ function frame(ts) {
     cam.y += (world.player.y - cam.y) * Math.min(1, dt);
   } else if (gameState === 'pause') {
     if (tapped(input, 'KeyP', 'Escape')) gameState = 'play';
+  } else if (gameState === 'victory') {
+    // The story is told; Enter (or a click) drops Rex back into the
+    // free-roam city with the finished save intact.
+    if (input.clicked || tapped(input, 'Enter')) {
+      gameState = 'play';
+      flash('FREE ROAM — SOLMAR IS YOURS', 2.6);
+    }
   } else if (gameState === 'modshop') {
     if (tapped(input, 'Escape')) gameState = 'play';
     if (tapped(input, 'Digit1')) buyMod(world, 'engine');

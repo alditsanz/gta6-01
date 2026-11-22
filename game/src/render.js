@@ -10,7 +10,7 @@ import { LANDMARKS, DISTRICTS, districtAt, BEACH, PARK, CANAL } from './landmark
 import { skyPhase, weatherOf } from './weather.js';
 import { WEAPONS } from './combat.js';
 import { stationLabel } from './radio.js';
-import { missionStage } from './missions.js';
+import { missionStage, MISSIONS } from './missions.js';
 import { coinsTaken, stashesTaken, jumpsDone } from './collectibles.js';
 import { zonesHeld } from './turf.js';
 import { racesWon } from './races.js';
@@ -1543,6 +1543,149 @@ export function drawMapScreen(ctx, world, vw, vh) {
   }
   ctx.fillStyle = '#7d8794'; ctx.font = '12px system-ui';
   ctx.fillText('P / ESC — RESUME · PROGRESS SAVES AUTOMATICALLY', rx, 606);
+}
+
+// ------------------------------------------------------------- victory ---
+
+// Everything the story-complete screen prints, gathered from the
+// world's real fields — the same stats, grade flags and system
+// counters the map & record screen reads. Nothing here invents a
+// number: if a mission has no grade flag yet, its slot stays '—'.
+export function victoryData(world) {
+  const s = world.stats;
+  const gradePoints = { S: 4, A: 3, B: 2, C: 1 };
+  const grades = MISSIONS.map((def, i) => ({
+    n: i + 1, title: def.title, giver: def.giver, pay: def.pay,
+    done: !!world.flags['done_' + def.id],
+    grade: world.flags['grade_' + def.id] || null,
+  }));
+  const earned = grades.filter((g) => g.grade && gradePoints[g.grade] !== undefined);
+  let overall = null;
+  if (earned.length) {
+    const avg = earned.reduce((sum, g) => sum + gradePoints[g.grade], 0) / earned.length;
+    overall = avg >= 3.5 ? 'S' : avg >= 2.5 ? 'A' : avg >= 1.5 ? 'B' : 'C';
+  }
+  const career = [
+    `Cash $${s.money.toLocaleString('en-US')} · Rank ${rankFor(s.rp).name} (${s.rp} RP)`,
+    `Cars stolen ${s.carsStolen} · Taxi fares ${s.fares} · Deliveries ${s.deliveries}`,
+    `Races won ${racesWon(world)}/3 · Turf held ${zonesHeld(world.turf)}/5`,
+    `Coins ${coinsTaken(world.collectibles)}/20 · Stashes ${stashesTaken(world.collectibles)}/12 · Jumps ${jumpsDone(world.collectibles)}/5`,
+    `Distance ${s.kmDriven.toFixed(1)} km · Near misses ${s.nearMisses}`,
+    `Cops escaped ${s.copsEscaped} · Longest chase ${s.longestChase}s · Mods ${modsBought(world.mods)}/9`,
+    `Play time ${Math.floor(s.playTime / 60)}m ${Math.floor(s.playTime % 60)}s`,
+  ];
+  const feats = [];
+  const rw = racesWon(world), zh = zonesHeld(world.turf), mb = modsBought(world.mods);
+  if (rw === 3) feats.push('GRAND TOUR — ALL 3 STREET RACES WON');
+  else if (rw > 0) feats.push(`STREET RACER — ${rw}/3 RACES WON`);
+  if (zh === 5) feats.push('KING OF SOLMAR — ALL 5 TURF ZONES HELD');
+  else if (zh > 0) feats.push(`TURF TAKEN — ${zh}/5 ZONES HELD`);
+  if (mb === 9) feats.push('FULLY BUILT — ALL 9 MODS FITTED');
+  else if (mb > 0) feats.push(`MODDED — ${mb}/9 UPGRADES FITTED`);
+  if (coinsTaken(world.collectibles) === 20) feats.push('COIN HOUND — ALL 20 SOLMAR COINS');
+  if (stashesTaken(world.collectibles) === 12) feats.push('LANTERN KEEPER — ALL 12 STASHES');
+  if (jumpsDone(world.collectibles) === 5) feats.push('AIRMILES — ALL 5 STUNT JUMPS');
+  if (s.copsEscaped >= 5) feats.push(`GHOST — ${s.copsEscaped} CLEAN ESCAPES FROM THE SCPD`);
+  else if (s.copsEscaped > 0) feats.push(`SLIPPERY — ${s.copsEscaped} ESCAPE${s.copsEscaped === 1 ? '' : 'S'} FROM THE SCPD`);
+  if (s.longestChase >= 120) feats.push(`HEATPROOF — LONGEST CHASE ${s.longestChase}S`);
+  if (!feats.length) feats.push('CLEAN SHEET — THE CITY NEVER SAW HIM COME');
+  return {
+    grades, overall,
+    payout: MISSIONS.reduce((sum, def) => sum + def.pay, 0),
+    score: s.score, career, feats: feats.slice(0, 6),
+    pct: completionPct(world),
+  };
+}
+
+export function drawVictory(ctx, world, vw, vh) {
+  const data = victoryData(world);
+  // Night-gold backdrop: a dusk gradient over the whole frame with a
+  // lit skyline stack behind the headline, echoing the title vista.
+  const sky = ctx.createLinearGradient(0, 0, 0, vh);
+  sky.addColorStop(0, '#241243'); sky.addColorStop(0.34, '#4a2358');
+  sky.addColorStop(0.55, '#14101f'); sky.addColorStop(1, '#0b0e13');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, vw, vh);
+  const layers = [
+    { color: 'rgba(122,74,128,0.8)', seed: 21, min: 40, max: 104, winA: 0.35 },
+    { color: 'rgba(40,24,64,0.95)', seed: 47, min: 96, max: 190, winA: 0.8 },
+  ];
+  for (const layer of layers) {
+    drawSkylineSilhouette(ctx, vw, 252, layer.color, layer.seed, layer.min, layer.max);
+    ctx.fillStyle = `rgba(255,205,110,${layer.winA})`;
+    let bx = 8, bi = 0;
+    while (bx < vw - 10) {
+      const bw = 40 + hash2(layer.seed + bi * 3, layer.seed) * 84;
+      const bh = layer.min + hash2(layer.seed, bi * 7) * (layer.max - layer.min);
+      for (let r = 0; r < Math.floor(bh / 17); r++) for (let c = 0; c < Math.floor(bw / 13); c++) {
+        if (hash2(bi * 31 + c * 5, r * 11 + layer.seed) > 0.52) {
+          ctx.fillRect(bx + 5 + c * 13, 252 - bh + 8 + r * 17, 5.4, 7);
+        }
+      }
+      bx += bw + 6 + hash2(bi, layer.seed * 2) * 26;
+      bi += 1;
+    }
+  }
+  // Headline block.
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 19px system-ui';
+  ctx.fillText('S O L M A R   H E A T', vw / 2, 58);
+  const grad = ctx.createLinearGradient(0, 70, 0, 160);
+  grad.addColorStop(0, '#ffd94d'); grad.addColorStop(0.55, '#ff8a3c'); grad.addColorStop(1, '#e5534b');
+  ctx.font = '900 72px system-ui';
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillText('STORY COMPLETE', vw / 2 + 3, 143);
+  ctx.fillStyle = grad;
+  ctx.fillText('STORY COMPLETE', vw / 2, 140);
+  ctx.fillStyle = '#fff'; ctx.font = '16px system-ui';
+  ctx.fillText('The bank job is done, the take is clean — Rex Kane owns the night.', vw / 2, 178);
+  if (data.overall) {
+    ctx.font = 'bold 15px system-ui'; ctx.fillStyle = '#ffd94d';
+    ctx.fillText(`OVERALL GRADE ${data.overall} · ALL 5 JOBS DONE`, vw / 2, 206);
+  }
+  // Left plate: the five story grades.
+  plate(ctx, 70, 250, 540, 300, 0.78);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 16px system-ui';
+  ctx.fillText('STORY — FINAL GRADES', 94, 284);
+  data.grades.forEach((g, i) => {
+    const y = 322 + i * 38;
+    ctx.fillStyle = g.done ? '#e8ecf2' : '#7d8794'; ctx.font = '15px system-ui';
+    ctx.fillText(`${g.n}. ${g.title}`, 94, y);
+    ctx.fillStyle = '#8a93a1'; ctx.font = '12px system-ui';
+    ctx.fillText(g.giver, 94, y + 16);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = g.grade ? '#ffd94d' : '#7d8794'; ctx.font = '900 27px system-ui';
+    ctx.fillText(g.grade || '—', 586, y + 6);
+    ctx.textAlign = 'left';
+  });
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(94, 506); ctx.lineTo(586, 506); ctx.stroke();
+  ctx.fillStyle = '#9fd48f'; ctx.font = 'bold 14px system-ui';
+  ctx.fillText(`STORY PAYOUT $${data.payout.toLocaleString('en-US')} — EVERY JOB IN THE BOOK`, 94, 532);
+  // Right plate: final score + the career record.
+  plate(ctx, 670, 250, 540, 300, 0.78);
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 16px system-ui';
+  ctx.fillText('CAREER — FINAL RECORD', 694, 284);
+  ctx.fillStyle = '#aab4c2'; ctx.font = '12px system-ui';
+  ctx.fillText('FINAL SCORE', 694, 316);
+  ctx.fillStyle = '#ffd94d'; ctx.font = '900 34px system-ui';
+  ctx.fillText(data.score.toLocaleString('en-US'), 694, 352);
+  ctx.fillStyle = '#e8ecf2'; ctx.font = '13.5px system-ui';
+  data.career.forEach((line, i) => ctx.fillText(line, 694, 384 + i * 20));
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 14px system-ui';
+  ctx.fillText(`COMPLETION ${data.pct.toFixed(1)}%`, 694, 384 + data.career.length * 20 + 10);
+  // Feats band: only honours whose backing flags the run really set.
+  plate(ctx, 70, 566, 1140, 72, 0.78);
+  ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 13px system-ui';
+  ctx.fillText('FEATS', 94, 596);
+  ctx.fillStyle = '#e8ecf2'; ctx.font = '12.5px system-ui';
+  const half = Math.ceil(data.feats.length / 2);
+  ctx.fillText(data.feats.slice(0, half).join('   ·   '), 160, 596);
+  if (data.feats.length > half) ctx.fillText(data.feats.slice(half).join('   ·   '), 160, 620);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#7d8794'; ctx.font = '12px system-ui';
+  ctx.fillText('ENTER — FREE ROAM SOLMAR · PROGRESS SAVES AUTOMATICALLY', vw / 2, 672);
+  ctx.textAlign = 'left';
 }
 
 // ------------------------------------------------------------- title etc. ---

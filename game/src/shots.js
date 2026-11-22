@@ -8,7 +8,7 @@ import { startMission } from './missions.js';
 import { spawnGang } from './combat.js';
 import { skyPhase } from './weather.js';
 
-export const SHOT_NAMES = ['chase', 'vault', 'map', 'title'];
+export const SHOT_NAMES = ['chase', 'vault', 'map', 'victory'];
 
 function setClock(world, hour) {
   world.weather.clock = hour;
@@ -31,6 +31,30 @@ function midGame(world) {
   world.collectibles.jumps.forEach((j, i) => { if (i < 2) j.done = true; });
   world.turf.zones.forEach((z, i) => { if (i < 3) z.owner = 'Rex'; });
   world.mods.engine = 2; world.mods.tires = 1; world.mods.armor = 1;
+  return world;
+}
+
+function finaleGame(world) {
+  // A completed campaign, written into the same real fields midGame
+  // uses — every number the victory screen prints is this world's
+  // true state: all five jobs done and graded, the side systems
+  // part-cleared exactly as their counters and flags say.
+  const s = world.stats;
+  s.money = 5240; s.rp = 1240; s.score = 4210;
+  s.carsStolen = 26; s.fares = 6; s.deliveries = 5; s.nearMisses = 17;
+  s.kmDriven = 48.9; s.copsEscaped = 9; s.longestChase = 143;
+  s.missionsDone = 5; s.playTime = 1876; s.racesWon = 2;
+  world.flags.done_m1 = true; world.flags.grade_m1 = 'A';
+  world.flags.done_m2 = true; world.flags.grade_m2 = 'S';
+  world.flags.done_m3 = true; world.flags.grade_m3 = 'A';
+  world.flags.done_m4 = true; world.flags.grade_m4 = 'B';
+  world.flags.done_m5 = true; world.flags.grade_m5 = 'A';
+  world.flags.race_coast = true; world.flags.race_grid = true;
+  world.collectibles.coins.forEach((c, i) => { if (i < 14) c.taken = true; });
+  world.collectibles.stashes.forEach((c, i) => { if (i < 9) c.taken = true; });
+  world.collectibles.jumps.forEach((j, i) => { if (i < 4) j.done = true; });
+  world.turf.zones.forEach((z, i) => { if (i < 4) z.owner = 'Rex'; });
+  world.mods.engine = 3; world.mods.armor = 2; world.mods.tires = 2;
   return world;
 }
 
@@ -188,6 +212,19 @@ export function stageShot(name) {
     world.player.x = 1500; world.player.y = 1500;
     world.flags.target = { x: 2600, y: 600 };
     return { world, cam: { x: 1800, y: 1800, zoom: 1 }, state: 'pause' };
+  }
+
+  if (name === 'victory') {
+    // The night after the bank job: a completed campaign on the
+    // beach backdrop, held for the story-complete screen.
+    const world = createWorld();
+    finaleGame(world);
+    setClock(world, 21.3);
+    world.weather.weatherIdx = 0;
+    world.player.x = 3050; world.player.y = 700; world.player.angle = 0.4;
+    trafficAround(world, 3050, 700, 5);
+    crowd(world, 3030, 640, 8, 220, false);
+    return { world, cam: { x: 3140, y: 690, zoom: 1.02 }, state: 'victory' };
   }
 
   // title: the beach at dusk, staged with the same mid-game save.
