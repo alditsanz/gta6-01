@@ -1,39 +1,52 @@
-// modshop.js — Lou's Mod Shop: three upgrade tracks, three levels
-// each, plus an armour refill. Levels live on the world, persist in
-// the save, and feed real numbers (top speed, damage taken, grip).
+// Solmar Heat — modshop.js
+// Lou's Mod Shop: three upgrade tracks (engine, armor, tires), three
+// levels each, bought with cash and persisted in the autosave. Lou's
+// Paint Shop lives here too — it clears heat and repairs the car.
 
 export const MOD_TRACKS = [
-  { id: 'engine', name: 'Engine', costs: [250, 500, 900],  blurb: '+8% top speed per level' },
-  { id: 'armor',  name: 'Armor',  costs: [200, 450, 800],  blurb: 'car takes less damage' },
-  { id: 'tires',  name: 'Tires',  costs: [150, 350, 650],  blurb: 'better grip, less slide' },
+  { id: 'engine', name: 'Engine', blurb: '+9% top speed per level', prices: [250, 450, 800] },
+  { id: 'armor',  name: 'Armor',  blurb: 'car shrugs off damage',   prices: [200, 400, 700] },
+  { id: 'tires',  name: 'Tires',  blurb: '+8% grip per level',      prices: [180, 350, 600] },
 ];
-export const ARMOUR_REFILL_COST = 120;
-export const MODS_TOTAL = 9;
 
-export function modsBought(world) {
-  return world.mods.engine + world.mods.armor + world.mods.tires;
+export function createModState() {
+  return { engine: 0, armor: 0, tires: 0 };
+}
+
+export function modsBought(mods) {
+  return mods.engine + mods.armor + mods.tires;
 }
 
 export function buyMod(world, trackId) {
-  const track = MOD_TRACKS.find(t => t.id === trackId);
+  const track = MOD_TRACKS.find((t) => t.id === trackId);
   if (!track) return { ok: false, why: 'no such track' };
-  const lvl = world.mods[trackId];
-  if (lvl >= 3) return { ok: false, why: 'max level' };
-  const cost = track.costs[lvl];
-  if (world.player.money < cost) return { ok: false, why: 'not enough cash' };
-  world.player.money -= cost;
-  world.mods[trackId] = lvl + 1;
-  return { ok: true, cost, level: lvl + 1 };
+  const level = world.mods[trackId];
+  if (level >= 3) return { ok: false, why: 'maxed' };
+  const price = track.prices[level];
+  if (world.stats.money < price) return { ok: false, why: 'cannot afford' };
+  world.stats.money -= price;
+  world.mods[trackId] = level + 1;
+  return { ok: true, price, level: level + 1 };
 }
 
-export function buyArmour(world) {
-  if (world.player.armour >= 100) return { ok: false, why: 'armour full' };
-  if (world.player.money < ARMOUR_REFILL_COST) return { ok: false, why: 'not enough cash' };
-  world.player.money -= ARMOUR_REFILL_COST;
-  world.player.armour = 100;
-  return { ok: true, cost: ARMOUR_REFILL_COST };
+export function applyMods(car, mods) {
+  // Returns the effective performance of a car under the player's mods.
+  const base = { topSpeed: car.topSpeed, grip: car.grip, armor: 1 };
+  base.topSpeed *= 1 + mods.engine * 0.09;
+  base.grip *= 1 + mods.tires * 0.08;
+  base.armor = 1 - mods.armor * 0.18;
+  return base;
 }
 
-export function engineMult(world) { return 1 + world.mods.engine * 0.08; }
-export function armorMult(world) { return 1 - world.mods.armor * 0.15; }
-export function tireMult(world) { return 1 + world.mods.tires * 0.10; }
+export const PAINT_PRICE = 120;
+
+export function usePaintShop(world) {
+  if (world.stats.money < PAINT_PRICE) return { ok: false, why: 'cannot afford' };
+  world.stats.money -= PAINT_PRICE;
+  world.heat = 0; world.peakStars = 0; world.chaseTime = 0;
+  world.cops.length = 0; world.footCops = [];
+  world.cars = world.cars.filter((c) => !c.police);
+  world.heli = null; world.roadblock = null;
+  if (world.player.car) world.player.car.hp = 100;
+  return { ok: true, price: PAINT_PRICE };
+}

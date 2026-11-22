@@ -1,77 +1,62 @@
-// collectibles.js — Solmar coins, Lantern Stashes and stunt ramps.
-// Positions are generated once from the world rng, so a seed always
-// hides them in the same places. Pickups are real state: taken
-// flags live on the world and persist in the save.
+// Solmar Heat — collectibles.js
+// The hidden-things layer: 20 Solmar coins ($75), 12 Lantern Stashes
+// ($120, tucked against walls) and 5 stunt jumps (hit the mark fast in
+// a car). Positions are seeded and fixed per world.
 
-import { WORLD } from './config.js';
-import { range } from './random.js';
+import { COIN_COUNT, STASH_COUNT, JUMP_COUNT } from './config.js';
 
-export const COIN_TOTAL = 20;
-export const STASH_TOTAL = 12;
-export const JUMP_TOTAL = 5;
-export const COIN_PAY = 75;
-export const STASH_PAY = 50;
-export const JUMP_PAY = 100;
-
-export function buildCollectibles(world) {
-  const rng = world.rng;
-  const coins = [], stashes = [], ramps = [];
-  // Coins favour landmarks and street corners — findable, not random dots.
-  for (let i = 0; i < COIN_TOTAL; i++) {
-    coins.push({ x: range(rng, 120, WORLD - 120), y: range(rng, 120, WORLD - 120), taken: false });
+export function createCollectibles(rng) {
+  const coins = [], stashes = [], jumps = [];
+  const cells = [];
+  for (let i = 0; i < COIN_COUNT; i++) {
+    // Spread coins over distinct grid cells so the hunt crosses the city.
+    let bx = (i * 4 + 1) % 9, by = (i * 5 + 2) % 9;
+    if (cells.includes(bx + ',' + by)) { bx = (bx + 1) % 9; by = (by + 3) % 9; }
+    cells.push(bx + ',' + by);
+    coins.push({ x: bx * 400 + 120 + rng.range(0, 160), y: by * 400 + 120 + rng.range(0, 160), taken: false });
   }
-  for (let i = 0; i < STASH_TOTAL; i++) {
-    stashes.push({ x: range(rng, 90, WORLD - 90), y: range(rng, 90, WORLD - 90), taken: false });
+  for (let i = 0; i < STASH_COUNT; i++) {
+    const bx = (i * 7 + 3) % 9, by = (i * 3 + 1) % 9;
+    stashes.push({ x: bx * 400 + 84 + rng.range(0, 40), y: by * 400 + 84 + rng.range(0, 220), taken: false });
   }
-  // Ramps sit on named roads so a fast run at them is a real line.
-  const rampSpots = [
-    { x: 754, y: 1900, angle: 0 }, { x: 1954, y: 760, angle: Math.PI / 2 },
-    { x: 2754, y: 2350, angle: Math.PI }, { x: 1154, y: 3100, angle: -Math.PI / 2 },
-    { x: 3154, y: 1500, angle: 0 },
+  // Jumps sit on fast straights: two avenues, the coast road, the canal
+  // bridge run and the dock straight.
+  const jumpSpots = [
+    { x: 800, y: 1600 }, { x: 2000, y: 800 }, { x: 3200, y: 400 },
+    { x: 1600, y: 2800 }, { x: 2800, y: 2000 },
   ];
-  for (const s of rampSpots) ramps.push({ ...s, done: false });
-  return { coins, stashes, ramps };
+  for (let i = 0; i < JUMP_COUNT; i++) jumps.push({ x: jumpSpots[i].x, y: jumpSpots[i].y, done: false });
+  return { coins, stashes, jumps, airTime: 0 };
 }
 
-export function coinsTaken(world) { return world.coins.filter(c => c.taken).length; }
-export function stashesTaken(world) { return world.stashes.filter(s => s.taken).length; }
-export function jumpsDone(world) { return world.ramps.filter(r => r.done).length; }
+export function coinsTaken(c) { return c.coins.filter((k) => k.taken).length; }
+export function stashesTaken(c) { return c.stashes.filter((k) => k.taken).length; }
+export function jumpsDone(c) { return c.jumps.filter((k) => k.done).length; }
 
-// Per-frame pickup checks for the player (on foot or in a car).
-export function stepCollectibles(world, events) {
+// Step pickups against the player (on foot or in a car). Returns a list
+// of event strings the caller turns into cash / HUD flashes.
+export function stepCollectibles(world, dt) {
+  const events = [];
   const p = world.player;
-  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
-  for (const c of world.coins) {
-    if (!c.taken && Math.hypot(c.x - px, c.y - py) < 30) {
-      c.taken = true; p.money += COIN_PAY; p.rp += 4;
-      events.push({ type: 'coin', x: c.x, y: c.y });
+  const c = world.collectibles;
+  for (const coin of c.coins) {
+    if (!coin.taken && Math.abs(coin.x - p.x) < 26 && Math.abs(coin.y - p.y) < 26) {
+      coin.taken = true; world.stats.money += 75; world.stats.rp += 6; events.push('coin');
     }
   }
-  for (const s of world.stashes) {
-    if (!s.taken && Math.hypot(s.x - px, s.y - py) < 26) {
-      s.taken = true; p.money += STASH_PAY; p.rp += 6;
-      events.push({ type: 'stash', x: s.x, y: s.y });
+  for (const stash of c.stashes) {
+    if (!stash.taken && Math.abs(stash.x - p.x) < 24 && Math.abs(stash.y - p.y) < 24) {
+      stash.taken = true; world.stats.money += 120; world.stats.rp += 10; events.push('stash');
     }
   }
-  // Stunt jumps: cross a ramp fast in a car and you are airborne.
-  if (p.car && !p.car.wrecked) {
-    for (const r of world.ramps) {
-      if (Math.hypot(r.x - px, r.y - py) < 30 && Math.abs(p.car.speed) > 240 && p.car.air <= 0) {
-        p.car.air = 0.85; p.car.airRamp = r;
-        events.push({ type: 'jump-start', x: r.x, y: r.y });
+  if (c.airTime > 0) c.airTime = Math.max(0, c.airTime - dt);
+  if (p.car && Math.abs(p.car.speed) > 235) {
+    for (const jump of c.jumps) {
+      if (!jump.done && Math.abs(jump.x - p.x) < 44 && Math.abs(jump.y - p.y) < 44) {
+        jump.done = true; c.airTime = 0.85;
+        world.stats.money += 90; world.stats.rp += 18; events.push('jump');
       }
     }
   }
-}
-
-// Called when an airborne car lands: score the jump once per ramp.
-export function landJump(world, car, events) {
-  const r = car.airRamp;
-  car.airRamp = null;
-  if (r && !r.done) {
-    r.done = true;
-    world.player.money += JUMP_PAY; world.player.rp += 15;
-    world.stats.jumpsLanded++;
-    events.push({ type: 'jump', x: car.x, y: car.y });
-  }
+  return events;
 }

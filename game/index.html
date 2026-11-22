@@ -3,16 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Heat — an original open-world crime game</title>
-<link rel="icon" href="data:,">
+<title>Solmar Heat — an open-world crime story</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #0b0e14; height: 100%; }
-  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-  canvas { width: min(100vw, 1280px); height: auto; aspect-ratio: 16 / 9; background: #000; box-shadow: 0 12px 60px rgba(0,0,0,0.6); }
+  html, body { margin: 0; padding: 0; background: #0b0e13; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; }
+  #wrap { width: min(100vw, 177.78vh); }
+  canvas { display: block; width: 100%; height: auto; background: #20262e; border-radius: 6px; }
+  #hint { color: #8a93a1; font-size: 12px; text-align: center; margin-top: 8px; }
 </style>
 </head>
 <body>
-<canvas id="game" width="1280" height="720"></canvas>
+<div id="wrap">
+  <canvas id="game" width="1280" height="720"></canvas>
+  <div id="hint">Solmar Heat — WASD drive · E enter car · mouse aim · click shoot · N next mission · P map &amp; record</div>
+</div>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

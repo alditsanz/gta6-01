@@ -1,79 +1,58 @@
-// props.js — deterministic street furniture for Solmar. Props are
-// pure data ({kind,x,y,angle,color}) generated from the world rng
-// inside createWorld; render.js knows how to draw each kind. This
-// is what stops block interiors reading as flat empty rectangles.
+// Solmar Heat — props.js
+// Deterministic street furniture. Props are plain data ({kind,x,y,...})
+// generated from the world's seeded rng inside createWorld, so the city
+// dressing is identical for a given seed and the renderer stays dumb.
 
-import { BLOCK, CELL, WORLD, BEACH_X, PARK_BLOCK, roadCenter } from './config.js';
-import { range, intRange, hash2 } from './random.js';
+import { hash2 } from './random.js';
+import { BEACH, PARK } from './landmarks.js';
 
-export function buildProps(world) {
-  const rng = world.rng;
+const PROP_KINDS = ['lamp', 'palm', 'tree', 'bench', 'planter', 'hydrant', 'newsbox', 'busstop', 'crate', 'barrel', 'umbrella', 'towel'];
+
+export function buildProps(rng) {
   const props = [];
+  const push = (kind, x, y, extra) => props.push(Object.assign({ kind, x, y, a: 0, c: 0 }, extra || {}));
 
-  // Street lamps: both sides of every road, spaced ~200 units.
-  for (let i = 0; i < 9; i++) {
-    const c = roadCenter(i);
-    for (let s = 60; s < WORLD; s += 200) {
-      props.push({ kind: 'lamp', x: c - 52, y: s, angle: 0 });
-      props.push({ kind: 'lamp', x: s, y: c + 52, angle: 0 });
+  // Street lamps along every street, both sides, staggered.
+  for (let line = 0; line <= 3600; line += 400) {
+    for (let at = 90; at < 3600; at += 200) {
+      push('lamp', line - 52, at, { a: 0 });
+      push('lamp', at, line + 52, { a: 1 });
     }
   }
-
-  // Palms: a double row along the boardwalk, clusters on the sand,
-  // and scattered shade trees in the park and random blocks.
-  for (let y = 120; y < WORLD; y += 130) {
-    props.push({ kind: 'palm', x: 3152, y: y + range(rng, -14, 14), angle: range(rng, 0, 6.28) });
-  }
+  // Palms crowd the beach and the boardwalk edge.
   for (let i = 0; i < 46; i++) {
-    props.push({ kind: 'palm', x: range(rng, 3230, 3450), y: range(rng, 40, WORLD - 40), angle: range(rng, 0, 6.28) });
+    push('palm', rng.range(BEACH.x0 + 30, BEACH.x1 - 60), rng.range(30, BEACH.y1 - 40), { s: rng.range(0.85, 1.3) });
   }
-  const parkX = PARK_BLOCK.bx * BLOCK, parkY = PARK_BLOCK.by * BLOCK;
-  for (let i = 0; i < 30; i++) {
-    props.push({ kind: 'tree', x: parkX + range(rng, 24, CELL - 24), y: parkY + range(rng, 24, CELL - 24), angle: 0 });
+  // Beach umbrellas + towels on the sand.
+  for (let i = 0; i < 26; i++) {
+    const x = rng.range(BEACH.x0 + 130, BEACH.x1 - 90), y = rng.range(50, BEACH.y1 - 60);
+    push(rng.chance(0.6) ? 'umbrella' : 'towel', x, y, { c: rng.int(0, 5) });
   }
-  for (let i = 0; i < 90; i++) {
-    const bx = intRange(rng, 0, 7), by = intRange(rng, 0, 8);
-    if (bx === PARK_BLOCK.bx && by === PARK_BLOCK.by) continue;
-    props.push({ kind: 'tree', x: bx * BLOCK + range(rng, 20, CELL - 20), y: by * BLOCK + range(rng, 20, CELL - 20), angle: 0 });
+  // Trees in the park and scattered through residential blocks.
+  for (let i = 0; i < 34; i++) push('tree', rng.range(PARK.x0 + 25, PARK.x1 - 25), rng.range(PARK.y0 + 25, PARK.y1 - 25), { s: rng.range(0.9, 1.4) });
+  for (let bx = 0; bx < 9; bx++) for (let by = 0; by < 9; by++) {
+    const n = 1 + Math.floor(hash2(bx * 7 + 1, by * 13 + 2) * 3);
+    for (let i = 0; i < n; i++) {
+      const x = bx * 400 + 84 + hash2(bx * 31 + i, by * 17) * 232;
+      const y = by * 400 + 84 + hash2(bx * 11, by * 29 + i) * 232;
+      if (x > BEACH.x0 && y < BEACH.y1) continue;
+      push('tree', x, y, { s: 0.8 + hash2(bx + i, by) * 0.5 });
+    }
   }
-
-  // Beach life: umbrellas and towels on the sand.
-  const umbCols = ['#e4572e', '#2e86e4', '#f2c230', '#e45a9c', '#39b56b'];
-  for (let i = 0; i < 34; i++) {
-    props.push({ kind: 'umbrella', x: range(rng, 3240, 3440), y: range(rng, 40, WORLD - 40), angle: 0, color: umbCols[i % umbCols.length] });
-  }
-  for (let i = 0; i < 22; i++) {
-    props.push({ kind: 'towel', x: range(rng, 3240, 3440), y: range(rng, 40, WORLD - 40), angle: range(rng, 0, 3.14), color: umbCols[(i + 2) % umbCols.length] });
-  }
-
-  // Plaza benches + planters; dock crates + barrels in the SE.
-  for (let i = 0; i < 12; i++) {
-    props.push({ kind: 'bench', x: 1630 + (i % 4) * 90, y: 430 + Math.floor(i / 4) * 120, angle: 0 });
-    props.push({ kind: 'planter', x: 1660 + (i % 4) * 90, y: 480 + Math.floor(i / 4) * 120, angle: 0 });
-  }
+  // Benches + planters on plaza / commercial blocks, hydrants + news
+  // boxes along sidewalks, bus stops on the avenues.
   for (let i = 0; i < 40; i++) {
-    const kind = i % 3 === 0 ? 'barrel' : 'crate';
-    props.push({ kind, x: range(rng, 2830, 3180), y: range(rng, 2830, 3550), angle: range(rng, 0, 3.14) });
+    const bx = rng.int(0, 8), by = rng.int(0, 8);
+    push(rng.chance(0.5) ? 'bench' : 'planter', bx * 400 + rng.range(80, 320), by * 400 + rng.range(80, 320), { a: rng.int(0, 3) });
   }
-
-  // Small street clutter everywhere: hydrants, news boxes, bus stops.
-  for (let i = 0; i < 120; i++) {
-    const kinds = ['hydrant', 'newsbox', 'busstop'];
-    const gx = intRange(rng, 0, 8), gy = intRange(rng, 0, 8);
-    props.push({ kind: kinds[i % 3], x: gx * BLOCK + CELL + 14, y: gy * BLOCK + range(rng, 10, CELL), angle: 0 });
+  for (let i = 0; i < 48; i++) push(rng.chance(0.5) ? 'hydrant' : 'newsbox', rng.range(70, 3530), rng.int(0, 8) * 400 + rng.range(70, 86));
+  for (let i = 0; i < 12; i++) push('busstop', rng.int(0, 8) * 400 + 70, rng.range(200, 3400), { a: 0 });
+  // Crates + barrels around the docks and industrial blocks.
+  for (let i = 0; i < 44; i++) {
+    const zone = rng.chance(0.55) ? { x: 3000, y: 1300 } : { x: 2600, y: 2500 };
+    push(rng.chance(0.5) ? 'crate' : 'barrel', zone.x + rng.range(0, 520), zone.y + rng.range(0, 900), { c: rng.int(0, 3) });
   }
-
-  // Per-building roof furniture is derived from hash2 at draw time
-  // (AC boxes, skylights, water towers) — no data needed here.
   return props;
 }
 
-// Roof furniture for a building, derived deterministically.
-export function roofKit(building) {
-  const h1 = hash2(building.bx * 31 + building.idx, building.by * 17 + 5);
-  const h2 = hash2(building.bx * 7 + 3, building.by * 41 + building.idx);
-  return {
-    ac: h1 > 0.35, acX: 0.2 + h1 * 0.55, acY: 0.25 + h2 * 0.4,
-    skylight: h2 > 0.55, tower: h1 > 0.86,
-  };
-}
+export { PROP_KINDS };

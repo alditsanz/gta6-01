@@ -1,11 +1,19 @@
-// weather.js — the day clock's sky phases and rolling weather.
-// Weather is atmosphere plus one real effect: rain cuts tyre grip.
+// Solmar Heat — weather.js
+// The day clock, sky phases and the rolling weather system. Pure logic:
+// the renderer asks this module what the sky looks like; missions never
+// depend on it except that rain genuinely loosens car grip.
 
-export const WEATHERS = ['clear', 'rain', 'fog'];
+export const WEATHERS = [
+  { id: 'clear', label: 'CLEAR', icon: '☀', grip: 1.0, view: 1.0 },
+  { id: 'rain',  label: 'RAIN',  icon: '☂', grip: 0.78, view: 0.9 },
+  { id: 'fog',   label: 'FOG',   icon: '≋', grip: 0.94, view: 0.62 },
+];
 
 export function skyPhase(clock) {
-  if (clock >= 5.5 && clock < 11) return 'morning';
-  if (clock >= 11 && clock < 16.5) return 'day';
+  // clock is hours 0..24. Phases drive light colour, shadow length and
+  // which lamps/windows glow.
+  if (clock >= 5.5 && clock < 8) return 'dawn';
+  if (clock >= 8 && clock < 16.5) return 'day';
   if (clock >= 16.5 && clock < 19.5) return 'golden';
   if (clock >= 19.5 && clock < 21.5) return 'dusk';
   return 'night';
@@ -16,37 +24,35 @@ export function isNight(clock) {
   return p === 'night' || p === 'dusk';
 }
 
-// Sky wash colour + strength per phase, used by the renderer.
-export const PHASE_TINT = {
-  morning: { color: 'rgba(255,214,150,0.06)', shadow: 10, warm: false },
-  day:     { color: 'rgba(255,255,255,0.00)', shadow: 7,  warm: false },
-  golden:  { color: 'rgba(255,150,50,0.16)',  shadow: 26, warm: true },
-  dusk:    { color: 'rgba(90,60,140,0.20)',   shadow: 20, warm: true },
-  night:   { color: 'rgba(8,12,40,0.42)',     shadow: 6,  warm: false },
-};
-
-export function gripFor(weather) {
-  if (weather === 'rain') return 0.72;
-  if (weather === 'fog') return 0.92;
-  return 1;
-}
-export function viewRangeFor(weather) {
-  return weather === 'fog' ? 0.62 : 1;
+export function createWeather(rng) {
+  return {
+    clock: 10.25,            // start mid-morning
+    weatherIdx: 0,
+    weatherTimer: 55,        // seconds until the weather may roll again
+    phase: skyPhase(10.25),
+  };
 }
 
-// Advance the weather machine: each kind lasts a while, then the
-// seeded rng picks the next (clear is favoured).
-export function stepWeather(world, dt) {
-  world.weatherTimer -= dt;
-  if (world.weatherTimer <= 0) {
-    const r = world.rng();
-    world.weather = r < 0.55 ? 'clear' : (r < 0.8 ? 'rain' : 'fog');
-    world.weatherTimer = 70 + world.rng() * 80;
+export function stepWeather(w, dt, rng, dayLengthSec) {
+  w.clock = (w.clock + (dt * 24) / dayLengthSec) % 24;
+  w.phase = skyPhase(w.clock);
+  w.weatherTimer -= dt;
+  if (w.weatherTimer <= 0) {
+    w.weatherTimer = 45 + rng() * 50;
+    const roll = rng();
+    w.weatherIdx = roll < 0.55 ? 0 : roll < 0.8 ? 1 : 2;
   }
+  return WEATHERS[w.weatherIdx];
 }
 
-export function formatClock(clock) {
-  const h = Math.floor(clock) % 24;
-  const m = Math.floor((clock - Math.floor(clock)) * 60);
-  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+export function weatherOf(w) {
+  return WEATHERS[w.weatherIdx];
+}
+
+// Rush-hour traffic density as a pure function of the clock hour:
+// peaks at the morning/evening commute, thin in the small hours.
+export function trafficDensity(clock) {
+  if ((clock >= 7 && clock < 9) || (clock >= 17 && clock < 19)) return 2.0;
+  if (clock >= 0 && clock < 5) return 0.5;
+  return 1.0;
 }

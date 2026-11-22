@@ -1,163 +1,166 @@
-// missions.js — the five-job story of Rex Kane, getaway driver
-// for Mama Lou. Each job is a list of steps with a kind the updater
-// understands; jobs are genuinely completable end-to-end and are
-// graded (S/A/B/C) on time against par and damage taken.
+// Solmar Heat — missions.js
+// The five-job story of Rex Kane, Lena Voss and the boss Kane. Each job
+// is a list of steps (goto / pickup / hold / escape / deliver) with a
+// timer, wanted pressure and a payout. The finale is the National Bank
+// job: hold the vault ring to 70%, then run the take to Pier 9.
 
-import { landmark, distTo } from './landmarks.js';
+import { landmarkById } from './landmarks.js';
+import { dist } from './random.js';
 import { addHeat } from './world.js';
 
 export const MISSIONS = [
   {
     id: 'm1', title: 'Wheels for Lou', giver: 'Mama Lou', pay: 150, par: 150,
-    blurb: 'Lift the marked Falco S and bring it home to the Paint Shop.',
+    intro: 'Lou needs wheels. Take the Vento and bring it back clean.',
     steps: [
-      { kind: 'steal', label: 'Steal the marked Falco S', short: 'STEAL THE FALCO', carType: 'falco' },
-      { kind: 'goto', label: "Deliver it to Lou's Paint Shop", short: 'DELIVER TO PAINT SHOP', at: 'paintshop' },
+      { kind: 'goto', label: 'Get in the red Vento by the safehouse', x: 368, y: 1032, r: 70 },
+      { kind: 'goto', label: "Deliver the Vento to Lou's Paint Shop", x: 600, y: 1000, r: 100 },
     ],
   },
   {
     id: 'm2', title: 'The Palms Package', giver: 'Mama Lou', pay: 400, par: 210,
-    blurb: 'Pick up a package at The Palms Motel. Drop it at Pier 9. Do not be followed.',
+    intro: 'A package waits at The Palms Motel. Kane\'s boys will notice.',
     steps: [
-      { kind: 'goto', label: 'Pick up the package at The Palms Motel', short: 'PICK UP AT THE PALMS', at: 'motel' },
-      { kind: 'goto', label: 'Drop the package at Pier 9', short: 'DROP AT PIER 9', at: 'pier9', heat: 120 },
+      { kind: 'pickup', label: 'Pick up the package at The Palms Motel', x: 2600, y: 600, r: 100, heat: 120 },
+      { kind: 'escape', label: 'Lose the heat, then reach Pier 9', x: 3400, y: 200, r: 110 },
     ],
   },
   {
-    id: 'm3', title: 'National Bank Job', giver: 'Mama Lou', pay: 1200, par: 300,
-    blurb: 'Walk into Solmar National, hold the vault, then run for Pier 9.',
+    id: 'm3', title: 'Neon Night Run', giver: 'Lena Voss', pay: 650, par: 240,
+    intro: 'Lena runs a ledger across the Strip. Drive her route, fast.',
     steps: [
-      { kind: 'goto', label: 'Reach Solmar National Bank', short: 'REACH THE BANK', at: 'bank' },
-      { kind: 'vault', label: 'Hold the vault circle', short: 'HOLD THE VAULT', at: 'bank', holdTo: 100 },
-      { kind: 'goto', label: 'Escape to Pier 9', short: 'ESCAPE TO PIER 9', at: 'pier9', heat: 320 },
+      { kind: 'pickup', label: 'Meet Lena at Cactus Court Plaza', x: 600, y: 600, r: 100 },
+      { kind: 'goto', label: 'Run the ledger to the Neon Strip drop', x: 3000, y: 600, r: 110, heat: 210 },
+      { kind: 'escape', label: 'Escape to the Marina with Lena', x: 3400, y: 1800, r: 110 },
     ],
   },
   {
-    id: 'm4', title: 'Harbor Lights', giver: 'Dex', pay: 700, par: 260,
-    blurb: 'Crates off a boat at the Marina, across town to Cactus Court — with the whole SCPD awake.',
+    id: 'm4', title: 'Canal Row Ambush', giver: 'Lena Voss', pay: 900, par: 260,
+    intro: 'The Vipers set a meet on Canal Row. It is a trap. Survive it.',
     steps: [
-      { kind: 'goto', label: 'Collect the crates at Solmar Marina', short: 'COLLECT AT MARINA', at: 'marina' },
-      { kind: 'goto', label: 'Deliver the crates to Cactus Court Plaza', short: 'DELIVER TO THE PLAZA', at: 'plaza', heat: 220 },
-      { kind: 'goto', label: 'Shake the tail — reach the Safehouse', short: 'REACH THE SAFEHOUSE', at: 'safehouse' },
+      { kind: 'goto', label: 'Go to the Canal Row meet', x: 3000, y: 1700, r: 110 },
+      { kind: 'hold', label: 'Hold the canal bank against the Vipers', seconds: 14, gang: 5, heat: 260, r: 150 },
+      { kind: 'escape', label: 'Escape to Solmar General Hospital', x: 3000, y: 3000, r: 110 },
     ],
   },
   {
-    id: 'm5', title: 'Neon Crown', giver: 'Mama Lou', pay: 1500, par: 330,
-    blurb: 'Take the Neon Strip block and hold it. Whoever holds the Strip holds Solmar.',
+    id: 'm5', title: 'National Bank Job', giver: 'Kane', pay: 1200, par: 300,
+    intro: 'One last score: the Solmar National Bank vault. Hold it, run it.',
     steps: [
-      { kind: 'goto', label: 'Reach the Neon Strip block', short: 'REACH THE STRIP', at: 'motel' },
-      { kind: 'hold', label: 'Hold the block against the Vipers', short: 'HOLD THE BLOCK', at: 'motel', holdSec: 24 },
-      { kind: 'goto', label: 'Fall back to the Safehouse', short: 'FALL BACK — SAFEHOUSE', at: 'safehouse', heat: 200 },
+      { kind: 'goto', label: 'Reach Solmar National Bank', x: 1800, y: 1800, r: 120 },
+      { kind: 'hold', label: 'Hold the vault ring while it cracks', seconds: 20, gang: 7, heat: 320, vault: true, r: 140 },
+      { kind: 'escape', label: 'Escape with the take to Pier 9', x: 3400, y: 200, r: 120 },
     ],
   },
 ];
 
-export function missionById(id) { return MISSIONS.find(m => m.id === id); }
+export function missionByIndex(i) { return MISSIONS[i] || null; }
 
-// The next unfinished job in story order, or null when done.
-export function nextMission(world) {
-  return MISSIONS[world.stats.missionsDone] || null;
-}
-
-// Stage info for the HUD header: MISSION n/5 · STAGE x/y · NEXT.
-export function missionStage(world) {
-  if (!world.mission) return null;
-  const m = world.mission.def;
-  const step = m.steps[world.mission.step];
-  const next = m.steps[world.mission.step + 1] || null;
-  return {
-    idx: MISSIONS.indexOf(m), total: MISSIONS.length, def: m, step,
-    stepIdx: world.mission.step, stepCount: m.steps.length,
-    nextLabel: next ? next.short : null,
+export function startMission(world, idx) {
+  const def = missionByIndex(idx);
+  if (!def) return null;
+  world.mission = {
+    idx, def, step: 0, timer: def.par + 90, holdTimer: 0,
+    vaultPct: 0, done: false, failed: false, gangSpawned: false,
   };
-}
-
-export function stepTarget(world) {
-  const ms = missionStage(world);
-  if (!ms) return null;
-  const step = ms.step;
-  if (step.kind === 'steal') {
-    const car = world.cars.find(c => c.id === world.mission.targetCarId);
-    return car ? { x: car.x, y: car.y } : null;
-  }
-  return landmark(step.at);
-}
-
-export function startMission(world, def) {
-  world.mission = { def, step: 0, vault: 0, holdT: 0, targetCarId: null };
-  world.missionTime = 0;
-  world.missionDamage = 0;
-  const first = def.steps[0];
-  if (first.kind === 'steal') {
-    // A marked car of the wanted type, parked across town. If the
-    // seeded traffic rolled no such car, retype a donor so the job
-    // can always be completed.
-    const spot = { x: 2754, y: 1154 };
-    let car = world.cars.find(c => c.type === first.carType);
-    if (!car) {
-      car = world.cars[0];
-      car.type = 'falco'; car.name = 'Falco S'; car.style = 'sport'; car.color = '#e8a71c';
-    }
-    car.x = spot.x; car.y = spot.y; car.parked = false; car.speed = 0; car.driver = 'target';
-    world.mission.targetCarId = car.id;
-  }
   return world.mission;
 }
 
-export function gradeFor(def, seconds, damage) {
-  const t = seconds / def.par;
-  if (t <= 1 && damage < 25) return 'S';
-  if (t <= 1.3 && damage < 60) return 'A';
-  if (t <= 1.8) return 'B';
+// A step without its own coordinates (a hold) happens where the
+// previous step ended — resolve the effective position here.
+export function stepPos(m, idx) {
+  for (let i = Math.min(idx, m.def.steps.length - 1); i >= 0; i--) {
+    const s = m.def.steps[i];
+    if (s.x !== undefined) return { x: s.x, y: s.y, r: s.r || 90 };
+  }
+  return { x: 0, y: 0, r: 90 };
+}
+
+export function missionStage(world) {
+  const m = world.mission;
+  if (!m) return null;
+  const step = m.def.steps[m.step];
+  const next = m.def.steps[m.step + 1];
+  return {
+    idx: m.idx, title: m.def.title, step: m.step, steps: m.def.steps.length,
+    label: step ? step.label : '', nextLabel: next ? next.label : null,
+    timer: m.timer, vaultPct: m.vaultPct, kind: step ? step.kind : null,
+  };
+}
+
+export function gradeFor(mission, timeLeft) {
+  // Letter grade from how much of the generous timer is left. Accepts
+  // either a live mission instance or a bare mission definition.
+  const def = mission.def || mission;
+  const frac = timeLeft / (def.par + 90);
+  if (frac > 0.55) return 'S';
+  if (frac > 0.38) return 'A';
+  if (frac > 0.2) return 'B';
   return 'C';
 }
 
-function completeMission(world, events) {
-  const def = world.mission.def;
-  const grade = gradeFor(def, world.missionTime, world.missionDamage);
-  world.grades[def.id] = grade;
-  world.player.money += def.pay;
-  world.player.rp += 60 + (grade === 'S' ? 40 : grade === 'A' ? 25 : 10);
-  world.stats.missionsDone++;
-  events.push({ type: 'mission-done', def, grade });
-  world.mission = null;
+export function stepMission(world, dt) {
+  const events = [];
+  const m = world.mission;
+  if (!m || m.done || m.failed) return events;
+  const step = m.def.steps[m.step];
+  if (!step) { finishMission(world, events); return events; }
+  m.timer -= dt;
+  if (m.timer <= 0) {
+    m.failed = true; events.push('mission-failed');
+    world.mission = null;
+    return events;
+  }
+  const p = world.player;
+  const pos = stepPos(m, m.step);
+  const near = dist(p.x, p.y, pos.x, pos.y) < pos.r;
+  if (step.kind === 'hold') {
+    if (!m.gangSpawned) {
+      m.gangSpawned = true;
+      events.push('spawn-gang:' + (step.gang || 5));
+      if (step.heat) addHeat(world, step.heat);
+    }
+    if (near) {
+      m.holdTimer += dt;
+      if (step.vault) m.vaultPct = Math.min(100, (m.holdTimer / step.seconds) * 100);
+      if (m.holdTimer >= step.seconds) advanceStep(world, events);
+    }
+    return events;
+  }
+  if (near) {
+    if (step.heat) addHeat(world, step.heat);
+    if (step.kind === 'pickup') events.push('pickup');
+    advanceStep(world, events);
+  }
+  return events;
 }
 
 function advanceStep(world, events) {
-  world.mission.step++;
-  const step = world.mission.def.steps[world.mission.step];
-  if (!step) { completeMission(world, events); return; }
-  if (step.heat) addHeat(world, step.heat);
-  if (step.kind === 'vault') world.mission.vault = 0;
-  if (step.kind === 'hold') world.mission.holdT = step.holdSec;
-  events.push({ type: 'mission-step', step });
+  const m = world.mission;
+  m.step += 1; m.holdTimer = 0; m.gangSpawned = false;
+  events.push('step');
+  if (m.step >= m.def.steps.length) finishMission(world, events);
 }
 
-// Called every frame by main while a mission is active.
-export function stepMission(world, dt, events) {
-  if (!world.mission) return;
-  world.missionTime += dt;
-  const ms = missionStage(world);
-  const step = ms.step;
-  const p = world.player;
-  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
-
-  if (step.kind === 'goto' || step.kind === 'vault' || step.kind === 'hold') {
-    const at = landmark(step.at);
-    const d = distTo(at, { x: px, y: py });
-    if (step.kind === 'goto' && d < 80) advanceStep(world, events);
-    else if (step.kind === 'vault') {
-      if (d < 95 && !p.car) {
-        world.mission.vault += dt * 14; // ~7 s in the circle
-        if (world.mission.vault >= step.holdTo) advanceStep(world, events);
-      }
-    } else if (step.kind === 'hold') {
-      if (d < 200) {
-        world.mission.holdT -= dt;
-        if (world.mission.holdT <= 0) advanceStep(world, events);
-      }
-    }
-  } else if (step.kind === 'steal') {
-    if (p.car && p.car.id === world.mission.targetCarId) advanceStep(world, events);
-  }
+function finishMission(world, events) {
+  const m = world.mission;
+  m.done = true;
+  const grade = gradeFor(m, Math.max(0, m.timer));
+  world.stats.money += m.def.pay;
+  world.stats.rp += 90 + m.idx * 30;
+  world.stats.score += 200 + m.idx * 60;
+  world.stats.missionsDone = Math.max(world.stats.missionsDone, m.idx + 1);
+  world.flags['grade_' + m.def.id] = grade;
+  world.flags['done_' + m.def.id] = true;
+  events.push('mission-done:' + grade);
+  world.mission = null;
 }
+
+export function missionTarget(world) {
+  const m = world.mission;
+  if (!m) return null;
+  const pos = stepPos(m, m.step);
+  return { x: pos.x, y: pos.y };
+}
+
+export { landmarkById };

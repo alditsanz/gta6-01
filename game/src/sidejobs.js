@@ -1,76 +1,76 @@
-// sidejobs.js — taxi fares and package deliveries: the honest
-// work between crimes. A fare waits at a kerb (press T nearby);
-// a delivery is a timed run where police attention costs heat.
+// Solmar Heat — sidejobs.js
+// Taxi fares and package deliveries: the honest work of Solmar.
+// A fare pays about $310 for a clean run; a delivery pays more but the
+// clock is tight and being spotted by police raises heat faster.
 
-import { range } from './random.js';
-import { addHeat } from './world.js';
+import { dist } from './random.js';
+import { addHeat, starsOf } from './world.js';
+import { LANDMARKS } from './landmarks.js';
 
-export const FARE_PAY = 310;
-export const DELIVERY_PAY = 260;
-
-const KERBS = [
-  { x: 754, y: 500 }, { x: 1554, y: 900 }, { x: 2354, y: 1400 }, { x: 954, y: 2200 },
-  { x: 2754, y: 2600 }, { x: 500, y: 754 }, { x: 3154, y: 1900 }, { x: 1954, y: 3154 },
-];
-
-export function spawnFare(world) {
+export function startFare(world) {
+  if (world.fare) return null;
   const rng = world.rng;
-  const from = KERBS[Math.floor(rng() * KERBS.length)];
-  let to = KERBS[Math.floor(rng() * KERBS.length)];
-  if (to === from) to = KERBS[(KERBS.indexOf(from) + 3) % KERBS.length];
-  world.fare = { x: from.x, y: from.y, destX: to.x, destY: to.y, aboard: false };
+  const from = LANDMARKS[rng.int(0, LANDMARKS.length - 1)];
+  let to = LANDMARKS[rng.int(0, LANDMARKS.length - 1)];
+  if (to.id === from.id) to = LANDMARKS[(LANDMARKS.indexOf(to) + 3) % LANDMARKS.length];
+  world.fare = {
+    phase: 'pickup', x: from.x + 90, y: from.y + 80,
+    dx: to.x + 40, dy: to.y + 90, timer: 150, name: to.name,
+  };
   return world.fare;
 }
 
-export function stepFare(world, events) {
-  const fare = world.fare;
-  if (!fare) return;
+export function stepFare(world, dt) {
+  const events = [];
+  const f = world.fare;
+  if (!f) return events;
   const p = world.player;
-  if (!fare.aboard) {
-    if (p.car && Math.hypot(fare.x - p.car.x, fare.y - p.car.y) < 55) {
-      fare.aboard = true;
-      events.push({ type: 'fare-pickup' });
+  if (!p.car) return events; // fares are driven, not walked
+  if (f.phase === 'pickup' && dist(p.x, p.y, f.x, f.y) < 70) {
+    f.phase = 'dropoff'; f.timer = 170; events.push('fare-pickup');
+  } else if (f.phase === 'dropoff') {
+    f.timer -= dt;
+    if (dist(p.x, p.y, f.dx, f.dy) < 80) {
+      const pay = 310 + Math.max(0, Math.floor(f.timer / 6));
+      world.stats.money += pay; world.stats.fares += 1; world.stats.rp += 22; world.stats.score += 60;
+      world.fare = null; events.push('fare-done:' + pay);
+    } else if (f.timer <= 0) {
+      world.fare = null; events.push('fare-failed');
     }
-  } else if (p.car && Math.hypot(fare.destX - p.car.x, fare.destY - p.car.y) < 70) {
-    p.money += FARE_PAY; p.rp += 8;
-    world.stats.fares++;
-    events.push({ type: 'fare-done', pay: FARE_PAY });
-    world.fare = null;
   }
+  return events;
 }
 
-export function spawnDelivery(world) {
-  const spots = [
-    { x: 2154, y: 2900 }, { x: 3350, y: 3300 }, { x: 1700, y: 600 }, { x: 600, y: 1554 },
-  ];
-  const a = spots[Math.floor(world.rng() * spots.length)];
-  let b = spots[Math.floor(world.rng() * spots.length)];
-  if (b === a) b = spots[(spots.indexOf(a) + 2) % spots.length];
-  world.delivery = { x: a.x, y: a.y, destX: b.x, destY: b.y, carried: false, t: 120 };
+export function startDelivery(world) {
+  if (world.delivery) return null;
+  const rng = world.rng;
+  const from = LANDMARKS[8]; // the Marina dock office
+  const to = LANDMARKS[rng.int(0, 6)];
+  world.delivery = {
+    phase: 'pickup', x: from.x - 120, y: from.y + 110,
+    dx: to.x - 60, dy: to.y - 100, timer: 130, name: to.name,
+  };
   return world.delivery;
 }
 
-export function stepDelivery(world, dt, events) {
+export function stepDelivery(world, dt) {
+  const events = [];
   const d = world.delivery;
-  if (!d) return;
+  if (!d) return events;
   const p = world.player;
-  const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
-  if (!d.carried) {
-    if (Math.hypot(d.x - px, d.y - py) < 55) { d.carried = true; events.push({ type: 'delivery-pickup' }); }
-    return;
+  if (d.phase === 'pickup' && dist(p.x, p.y, d.x, d.y) < 70) {
+    d.phase = 'dropoff'; events.push('delivery-pickup');
+  } else if (d.phase === 'dropoff') {
+    d.timer -= dt;
+    // Spotted: carrying the package, police attention compounds.
+    if (starsOf(world) > 0) addHeat(world, 5.5 * dt);
+    if (dist(p.x, p.y, d.dx, d.dy) < 85) {
+      const pay = 260 + Math.max(0, Math.floor(d.timer * 1.2));
+      world.stats.money += pay; world.stats.deliveries += 1; world.stats.rp += 30; world.stats.score += 80;
+      world.delivery = null; events.push('delivery-done:' + pay);
+    } else if (d.timer <= 0) {
+      world.delivery = null; events.push('delivery-failed');
+    }
   }
-  d.t -= dt;
-  // Being watched while carrying costs heat, slowly.
-  if (world.exposure > 0.4) addHeat(world, dt * 6);
-  if (Math.hypot(d.destX - px, d.destY - py) < 75) {
-    p.money += DELIVERY_PAY; p.rp += 12;
-    world.stats.deliveries++;
-    events.push({ type: 'delivery-done', pay: DELIVERY_PAY });
-    world.delivery = null;
-  } else if (d.t <= 0) {
-    events.push({ type: 'delivery-failed' });
-    world.delivery = null;
-  }
+  return events;
 }
-
-export { range };

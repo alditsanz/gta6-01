@@ -1,31 +1,34 @@
-// input.js — keyboard + mouse state. One shared object the game
-// loop polls; attach() is browser-only and guarded for Node tests.
+// Solmar Heat — input.js
+// Keyboard + mouse state. Everything is polled: `keys` for held keys,
+// `pressed` for one-frame edges (cleared by the main loop each frame),
+// and the mouse position in screen space for aiming.
 
-export const keys = {};
-export const mouse = { x: 0, y: 0, down: false, clicked: false };
-const pressed = {};
-
-export function attachInput(canvas) {
-  if (typeof window === 'undefined') return;
+export function createInput(canvas) {
+  const input = {
+    keys: new Set(), pressed: new Set(),
+    mouseX: 0, mouseY: 0, mouseDown: false, clicked: false,
+  };
   window.addEventListener('keydown', (e) => {
-    if (!keys[e.code]) pressed[e.code] = true;
-    keys[e.code] = true;
+    if (!e.repeat) input.pressed.add(e.code);
+    input.keys.add(e.code);
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   });
-  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+  window.addEventListener('keyup', (e) => input.keys.delete(e.code));
+  window.addEventListener('blur', () => { input.keys.clear(); input.mouseDown = false; });
   canvas.addEventListener('mousemove', (e) => {
     const r = canvas.getBoundingClientRect();
-    mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
-    mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
+    input.mouseX = ((e.clientX - r.left) / r.width) * canvas.width;
+    input.mouseY = ((e.clientY - r.top) / r.height) * canvas.height;
   });
-  canvas.addEventListener('mousedown', () => { mouse.down = true; mouse.clicked = true; });
-  window.addEventListener('mouseup', () => { mouse.down = false; });
+  canvas.addEventListener('mousedown', () => { input.mouseDown = true; input.clicked = true; });
+  window.addEventListener('mouseup', () => { input.mouseDown = false; });
+  return input;
 }
 
-// True only on the frame a key goes down (edge trigger).
-export function pressedOnce(code) { return !!pressed[code]; }
-export function endFrame() {
-  for (const k of Object.keys(pressed)) delete pressed[k];
-  mouse.clicked = false;
+export function held(input, ...codes) {
+  return codes.some((c) => input.keys.has(c));
 }
-export function down(...codes) { return codes.some(c => keys[c]); }
+
+export function tapped(input, ...codes) {
+  return codes.some((c) => input.pressed.has(c));
+}

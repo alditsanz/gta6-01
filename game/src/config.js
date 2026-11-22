@@ -1,79 +1,72 @@
-// config.js — Solmar Heat shared constants.
-// World geometry: a 9x9 grid of 400-unit cells. Each cell holds a
-// 308-unit building block; the remaining 92 units are road. Road
-// centrelines therefore sit at cell*400 + 354 on both axes.
+// Solmar Heat — config.js
+// Every shared tuning number for the game lives in this one module so the
+// rest of the code can stay declarative. Nothing here touches the DOM.
 
-export const WORLD = 3600;
-export const BLOCK = 400;
-export const ROAD_W = 92;
-export const CELL = BLOCK - ROAD_W; // 308
-export const GRID = 9;
+export const WORLD_SIZE = 3600;          // the city is a square, units are "metres-ish"
+export const BLOCK_PITCH = 400;          // distance between street centrelines
+export const STREET_HALF = 62;           // half the width of a street band
+export const BLOCK_INSET = 66;           // building zone starts this far from a block corner
 
-export function roadCenter(i) { return i * BLOCK + CELL + ROAD_W / 2; }
-export function isRoadCoord(v) { return (v % BLOCK) >= CELL; }
-export function isRoad(x, y) { return isRoadCoord(x) || isRoadCoord(y); }
-export function clampWorld(v) { return Math.max(8, Math.min(WORLD - 8, v)); }
+export const VIEW_W = 1280;
+export const VIEW_H = 720;
 
-// District names for the 3x3 macro grid (each macro cell is 1200).
-export const DISTRICTS = [
-  'Sunset Mile', 'Cactus Court', 'Neon Strip',
-  'Old Market', 'Downtown Solmar', 'Canal Row',
-  'Palm Heights', 'The Marina', 'Pier 9 Docks',
-];
-export function districtIndex(x, y) {
-  const cx = Math.min(2, Math.floor(x / 1200));
-  const cy = Math.min(2, Math.floor(y / 1200));
-  return cy * 3 + cx;
-}
-export function districtAt(x, y) { return DISTRICTS[districtIndex(x, y)]; }
+export const PLAYER_FOOT_SPEED = 148;
+export const PLAYER_SPRINT_SPEED = 218;
+export const PLAYER_RADIUS = 11;
+export const PLAYER_MAX_HP = 100;
+export const PLAYER_MAX_ARMOUR = 100;
 
-// The beach occupies the east column of blocks (bx = 8): sand from
-// x = 3200, boardwalk near x = 3160, water beyond x = 3480.
-export const BEACH_X = 3200;
-export const WATER_X = 3480;
-export const PARK_BLOCK = { bx: 1, by: 6 };   // green park block
-export const PLAZA_BLOCK = { bx: 4, by: 1 };  // paved plaza block
+export const HEAT_MAX = 599;             // heat is a 0..599 float, stars are bands of 100
+export const HEAT_DECAY_PER_SEC = 3.1;   // lay low and the stars bleed away
+export const SIGHT_RANGE = 430;          // police "in sight" radius for the HUD bar
 
-// Car catalogue: name, top speed (units/s), acceleration, colour
-// family and a body style the renderer switches on.
+export const TRAFFIC_COUNT = 42;
+export const PARKED_COUNT = 34;
+export const PED_COUNT = 72;
+
+export const COIN_COUNT = 20;
+export const STASH_COUNT = 12;
+export const JUMP_COUNT = 5;
+
+export const SAVE_KEY = 'solmar-heat-save-v15';
+
+export const DAY_LENGTH_SEC = 240;       // one full in-game day in real seconds
+
+// The twelve stealable/drivable car models of Solmar. topSpeed is in world
+// units per second; the speedometer converts with KMH_PER_UNIT.
+export const KMH_PER_UNIT = 0.62;
 export const CAR_TYPES = [
-  { id: 'sedan',   name: 'Meridian Sedan',  top: 300, acc: 190, style: 'sedan',   color: '#7d8ea3' },
-  { id: 'coupe',   name: 'Vela Coupe',      top: 340, acc: 230, style: 'coupe',   color: '#b0483e' },
-  { id: 'falco',   name: 'Falco S',         top: 430, acc: 320, style: 'sport',   color: '#e8a71c' },
-  { id: 'taxi',    name: 'Vento Taxi',      top: 300, acc: 200, style: 'taxi',    color: '#f2c230' },
-  { id: 'vento',   name: 'Vento Hatch',     top: 290, acc: 195, style: 'hatch',   color: '#c33d31' },
-  { id: 'van',     name: 'Harbor Van',      top: 260, acc: 160, style: 'van',     color: '#cfd4d8' },
-  { id: 'truck',   name: 'Dock Truck',      top: 240, acc: 140, style: 'truck',   color: '#5d7a52' },
-  { id: 'pickup',  name: 'Dune Pickup',     top: 310, acc: 210, style: 'pickup',  color: '#8a6f4d' },
-  { id: 'muscle',  name: 'Marlin Muscle',   top: 380, acc: 280, style: 'muscle',  color: '#3e5f8a' },
-  { id: 'compact', name: 'Pico Compact',    top: 265, acc: 185, style: 'compact', color: '#6fae7d' },
-  { id: 'limo',    name: 'Regal Limo',      top: 295, acc: 175, style: 'limo',    color: '#2e3138' },
-  { id: 'cruiser', name: 'SCPD Cruiser',    top: 360, acc: 260, style: 'police',  color: '#e8ebee' },
+  { id: 'sedan',   name: 'Meridian Sedan',  w: 46, h: 22, topSpeed: 300, accel: 210, grip: 3.4, color: '#b8bec9' },
+  { id: 'coupe',   name: 'Vela Coupe',      w: 45, h: 21, topSpeed: 340, accel: 250, grip: 3.8, color: '#7fb2d9' },
+  { id: 'falco',   name: 'Falco S',         w: 47, h: 21, topSpeed: 430, accel: 330, grip: 4.4, color: '#e8b13c' },
+  { id: 'taxi',    name: 'Vento Taxi',      w: 46, h: 22, topSpeed: 295, accel: 205, grip: 3.3, color: '#f2c230' },
+  { id: 'vento',   name: 'Vento',           w: 46, h: 22, topSpeed: 305, accel: 215, grip: 3.4, color: '#c33d2e' },
+  { id: 'van',     name: 'Harbor Van',      w: 52, h: 24, topSpeed: 265, accel: 175, grip: 2.9, color: '#d8d5cc' },
+  { id: 'truck',   name: 'Dock Truck',      w: 58, h: 25, topSpeed: 245, accel: 155, grip: 2.7, color: '#8a97a5' },
+  { id: 'pickup',  name: 'Dune Pickup',     w: 50, h: 23, topSpeed: 315, accel: 230, grip: 3.1, color: '#a5713f' },
+  { id: 'muscle',  name: 'Marlin Muscle',   w: 48, h: 22, topSpeed: 385, accel: 300, grip: 3.6, color: '#5d3a8c' },
+  { id: 'compact', name: 'Pico Compact',    w: 40, h: 20, topSpeed: 275, accel: 225, grip: 3.9, color: '#79c98f' },
+  { id: 'limo',    name: 'Regal Limo',      w: 60, h: 23, topSpeed: 320, accel: 200, grip: 3.2, color: '#2e3138' },
+  { id: 'cruiser', name: 'SCPD Cruiser',    w: 47, h: 22, topSpeed: 395, accel: 305, grip: 4.1, color: '#eef1f4' },
 ];
-export function carType(id) { return CAR_TYPES.find(t => t.id === id) || CAR_TYPES[0]; }
 
-// Respect ranks: RP thresholds ascending; the HUD shows name + x/y.
 export const RANKS = [
-  { name: 'Nobody',        rp: 0 },
-  { name: 'Runner',        rp: 120 },
-  { name: 'Wheelman',      rp: 300 },
-  { name: 'Hustler',       rp: 550 },
-  { name: 'Shot Caller',   rp: 850 },
-  { name: 'Street Royalty', rp: 1200 },
-  { name: 'Solmar Legend', rp: 1600 },
+  { rp: 0,    name: 'Nobody' },
+  { rp: 120,  name: 'Wheelman' },
+  { rp: 320,  name: 'Street Name' },
+  { rp: 650,  name: 'King of the Mile' },
+  { rp: 1100, name: 'Strip Royalty' },
+  { rp: 1700, name: 'Street Royalty' },
+  { rp: 2600, name: 'Solmar Legend' },
 ];
+
 export function rankFor(rp) {
-  let idx = 0;
-  for (let i = 0; i < RANKS.length; i++) if (rp >= RANKS[i].rp) idx = i;
-  const cur = RANKS[idx];
-  const next = RANKS[idx + 1] || null;
-  return { idx, name: cur.name, cur: cur.rp, next: next ? next.rp : cur.rp, nextName: next ? next.name : null };
+  let current = RANKS[0];
+  for (const rank of RANKS) if (rp >= rank.rp) current = rank;
+  return current;
 }
 
-// Crew: named characters with one usable ability each.
-export const CREW = [
-  { name: 'Mama Lou', role: 'Fixer',    ability: 'Swap Plates', key: 'C', cooldown: 120 },
-  { name: 'Dex',      role: 'Wheelman', ability: 'Nitro Surge', key: 'V', cooldown: 45 },
-];
-
-export const SAVE_PREFIX = 'solmar-heat-save-';
+export function nextRank(rp) {
+  for (const rank of RANKS) if (rp < rank.rp) return rank;
+  return null;
+}
