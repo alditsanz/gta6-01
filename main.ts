@@ -1,4 +1,4 @@
-// Solmar Heat — main.ts (the entrypoint, round 15)
+// Solmar Heat — main.ts (the entrypoint, round 16)
 // Copies game/ and screenshots/ from this repository into the output
 // directory and writes /output/dossier.json with buildDossier from
 // vendor/makefun-game.ts. Node 22, standard library only. Running it

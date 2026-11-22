@@ -90,13 +90,31 @@ export function stageShot(name) {
     const rbCop = makeCar(world.rng, 'cruiser', p.x + 235, p.y - 44, Math.PI / 2, { police: true, parked: true });
     rbCop.behaviour = 'ROADBLOCK';
     world.cars.push(rbCop);
-    // Burning wreck + traffic + crowd on the sidewalks.
-    const wreck = makeCar(world.rng, 'sedan', p.x - 300, p.y + 30, 0.4, { parked: true });
+    // Burning wreck ahead on the left shoulder (the round-16 camera
+    // looks forward, so the set dressing lives ahead of the hero).
+    const wreck = makeCar(world.rng, 'sedan', p.x + 305, p.y - 104, 0.4, { parked: true });
     wreck.wrecked = true; wreck.smoke = 1; wreck.hp = 0;
     world.cars.push(wreck);
     trafficAround(world, p.x, p.y, 8);
     crowd(world, p.x - 60, p.y - 120, 11, 330, false);
+    // One car approaching in the far (north) lane, headlights on.
+    const oncoming = makeCar(world.rng, 'coupe', p.x + 520, p.y - 27, Math.PI);
+    oncoming.ai = { traffic: true }; oncoming.speed = 150;
+    world.cars.push(oncoming);
+    // Sidewalk crowd placed for the perspective camera: eight-plus
+    // pedestrians ahead of the lens, alternating kerbs, some on the
+    // beach side. Exact spots so none land on the asphalt.
+    const walkSpots = [
+      [128, -88], [196, 92], [268, -104], [338, 84], [404, -80],
+      [472, 108], [540, -96], [596, 88], [452, 168], [300, 176],
+    ];
+    for (const [dx, dy] of walkSpots) {
+      const ped = makePed(world.rng, p.x - 90 + dx, p.y + dy);
+      ped.tx = ped.x; ped.ty = ped.y; ped.wait = 9;
+      world.peds.push(ped);
+    }
     world.heli = { x: p.x + 30, y: p.y - 150, angle: 0.4, rotor: 2 };
+    world.flags.scene = 'chase'; // round 16: perspective chase cam
     world.sighted = true;
     world.flags.target = { x: 2600, y: 600 };
     return { world, cam: { x: p.x + 40, y: p.y + 6, zoom: 1.06 }, state: 'play' };
@@ -122,7 +140,7 @@ export function stageShot(name) {
     world.mission.vaultPct = 70;
     world.flags.vaultRing = { x: bank.x, y: bank.y + 8, pct: 70 };
     world.flags.cashBags = [
-      { x: bank.x - 26, y: bank.y + 96 }, { x: bank.x + 4, y: bank.y + 104 }, { x: bank.x + 34, y: bank.y + 95 },
+      { x: bank.x - 122, y: bank.y + 78 }, { x: bank.x - 96, y: bank.y + 94 }, { x: bank.x + 126, y: bank.y + 82 },
     ];
     // Seven Vipers tight around the ring, firing both ways.
     spawnGang(world, 7, bank.x, bank.y + 6, 80);
@@ -156,6 +174,7 @@ export function stageShot(name) {
     for (const fc of world.footCops) { fc.color = '#274b8f'; fc.behaviour = 'FOOT CHASE'; }
     crowd(world, bank.x + 40, bank.y - 30, 13, 210, true);
     world.heli = null;
+    world.flags.scene = 'vault'; // round 16: ground-level over-shoulder
     world.flags.target = { x: bank.x, y: bank.y };
     void starsOf;
     return { world, cam: { x: bank.x + 6, y: bank.y + 6, zoom: 1.55 }, state: 'play' };

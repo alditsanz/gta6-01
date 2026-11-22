@@ -22,7 +22,7 @@ import { startFare, stepFare, startDelivery, stepDelivery } from './sidejobs.js'
 import { startRace, stepRace, RACES } from './races.js';
 import { buyMod, usePaintShop } from './modshop.js';
 import { landmarkById, LANDMARKS } from './landmarks.js';
-import { drawWorld, drawHUD, drawMapScreen, drawTitle, drawModShop, drawEndScreen } from './render.js';
+import { drawWorld, drawScene, drawHUD, drawMapScreen, drawTitle, drawModShop, drawEndScreen } from './render.js';
 import { stageShot } from './shots.js';
 
 const canvas = document.getElementById('game');
@@ -356,7 +356,10 @@ function draw() {
     drawHUD(ctx, world, VIEW_W, VIEW_H);
     drawEndScreen(ctx, world, VIEW_W, VIEW_H, gameState === 'busted');
   } else {
-    drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
+    // Staged shots with a round-16 scene flag render through the
+    // perspective camera; live play keeps the top-down world view.
+    if (world.flags.scene) drawScene(ctx, world, cam, VIEW_W, VIEW_H);
+    else drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
     drawHUD(ctx, world, VIEW_W, VIEW_H);
   }
 }
