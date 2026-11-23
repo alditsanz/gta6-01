@@ -1,7 +1,5 @@
-// Solmar Heat — serve.ts
-// A tiny local static server for playing the game during development:
-//   node serve.ts  →  http://localhost:8077/
-// Node standard library only; serves game/ and nothing else.
+// Solmar Heat — a tiny static file server for local play.
+// Serves only the game/ folder:  node serve.ts  →  http://localhost:8077/
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -10,9 +8,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), 'game');
 const port = Number(process.env.PORT || 8077);
+
 const types: Record<string, string> = {
-  '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json',
-  '.jpg': 'image/jpeg', '.png': 'image/png', '.css': 'text/css',
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.json': 'application/json',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.css': 'text/css',
 };
 
 createServer((req, res) => {
@@ -21,7 +24,8 @@ createServer((req, res) => {
   if (path === '/' || path === '\\') path = 'index.html';
   const file = join(root, path);
   if (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile()) {
-    res.writeHead(404); res.end('not found');
+    res.writeHead(404);
+    res.end('not found');
     return;
   }
   res.writeHead(200, { 'content-type': types[extname(file)] || 'application/octet-stream' });

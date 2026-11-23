@@ -1,6 +1,5 @@
-// Solmar Heat — radio.js
-// Three original Solmar stations. The world picks one at creation from
-// its seeded rng; Q (or a slow auto-cycle while driving) changes it.
+// Solmar Heat — the dial. Three stations, one label helper with
+// wraparound so any index the tuner lands on reads cleanly.
 
 export const RADIO_STATIONS = [
   { name: 'SOLMAR FM 98.1', tag: 'Coastal Gold' },
@@ -9,6 +8,8 @@ export const RADIO_STATIONS = [
 ];
 
 export function stationLabel(idx) {
-  const s = RADIO_STATIONS[((idx % RADIO_STATIONS.length) + RADIO_STATIONS.length) % RADIO_STATIONS.length];
-  return `♪ ${s.name} — ${s.tag}`;
+  const total = RADIO_STATIONS.length;
+  const wrapped = ((idx % total) + total) % total;
+  const station = RADIO_STATIONS[wrapped];
+  return `♪ ${station.name} — ${station.tag}`;
 }

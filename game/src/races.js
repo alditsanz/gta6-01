@@ -1,7 +1,5 @@
-// Solmar Heat — races.js
-// Three street-race routes (easy / medium / hard) run as checkpoint
-// sequences. Beat the par time and the purse scales with difficulty;
-// run dry and the route simply resets for another try.
+// Solmar Heat — street races. Three checkpoint routes across the
+// grid; beat the clock and the purse grows with whatever time is left.
 
 import { dist } from './random.js';
 
@@ -23,7 +21,9 @@ export const RACES = [
   },
 ];
 
-export function raceById(id) { return RACES.find((r) => r.id === id) || null; }
+export function raceById(id) {
+  return RACES.find((r) => r.id === id) || null;
+}
 
 export function startRace(world, raceId) {
   const def = raceById(raceId);
@@ -36,17 +36,24 @@ export function stepRace(world, dt) {
   const events = [];
   const race = world.race;
   if (!race) return events;
+
   race.timer -= dt;
-  if (race.timer <= 0) { world.race = null; events.push('race-failed'); return events; }
+  if (race.timer <= 0) {
+    world.race = null;
+    events.push('race-failed');
+    return events;
+  }
+
   const target = race.def.points[race.idx];
   if (target && dist(world.player.x, world.player.y, target[0], target[1]) < 95) {
     race.idx += 1;
     events.push('race-checkpoint');
     if (race.idx >= race.def.points.length) {
-      const bonus = Math.floor(race.timer * 2);
-      const pay = race.def.pay + bonus;
-      world.stats.money += pay; world.stats.racesWon += 1;
-      world.stats.rp += 45; world.stats.score += 120;
+      const pay = race.def.pay + Math.floor(race.timer * 2);
+      world.stats.money += pay;
+      world.stats.racesWon += 1;
+      world.stats.rp += 45;
+      world.stats.score += 120;
       world.flags['race_' + race.def.id] = true;
       world.race = null;
       events.push('race-won:' + pay);

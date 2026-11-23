@@ -1,50 +1,65 @@
-// Solmar Heat — combat.js
-// Guns, fists and the Vipers. Bullets are swept along their whole path
-// each frame (segment vs circle), so a fast bullet can never tunnel
-// through a thin target. Gang members carry hp and drop cash.
+// Solmar Heat — fists, guns and consequences. Bullets are swept along
+// a segment each tick so fast rounds cannot tunnel through a target;
+// gang members fight back, foot cops try to make the bust, and every
+// shot fired in anger feeds the heat system.
 
 import { dist, angleTo } from './random.js';
 import { addHeat, makePed } from './world.js';
 
 export const WEAPONS = [
-  { id: 'fists',  name: 'Fists',  slot: '1', damage: 16, rate: 0.32, speed: 0,    range: 30,  ammo: Infinity },
-  { id: 'pistol', name: 'Pistol', slot: '2', damage: 26, rate: 0.24, speed: 880,  range: 460, ammo: 12 },
-  { id: 'smg',    name: 'SMG',    slot: '3', damage: 17, rate: 0.09, speed: 940,  range: 420, ammo: 30 },
+  { id: 'fists', name: 'Fists', slot: '1', damage: 16, rate: 0.32, speed: 0, range: 30, ammo: Infinity },
+  { id: 'pistol', name: 'Pistol', slot: '2', damage: 26, rate: 0.24, speed: 880, range: 460, ammo: 12 },
+  { id: 'smg', name: 'SMG', slot: '3', damage: 17, rate: 0.09, speed: 940, range: 420, ammo: 30 },
 ];
 
 export function spawnGang(world, count, cx, cy, spread) {
-  const gang = [];
+  const crew = [];
+  const radius = spread || 80;
   for (let i = 0; i < count; i++) {
-    const a = (i / Math.max(1, count)) * Math.PI * 2;
-    const r = spread || 80;
-    const g = makePed(world.rng, cx + Math.cos(a) * r, cy + Math.sin(a) * r, { role: 'gang' });
-    g.color = '#7a1f1f'; g.hp = 60; g.maxHp = 60; g.fireTimer = 1 + world.rng() * 1.6;
-    world.gang.push(g); gang.push(g);
+    const bearing = (i / count) * Math.PI * 2;
+    const member = makePed(world.rng, cx + Math.cos(bearing) * radius, cy + Math.sin(bearing) * radius, { role: 'gang' });
+    member.color = '#7a1f1f';
+    member.hp = 60;
+    member.maxHp = 60;
+    member.fireTimer = 1 + world.rng() * 1.6;
+    world.gang.push(member);
+    crew.push(member);
   }
-  return gang;
+  return crew;
 }
 
+// Does the swept segment (x1,y1)->(x2,y2) pass through the circle?
 function segmentHitsCircle(x1, y1, x2, y2, cx, cy, r) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const len2 = dx * dx + dy * dy || 1;
-  let t = ((cx - x1) * dx + (cy - y1) * dy) / len2;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq > 0 ? ((cx - x1) * dx + (cy - y1) * dy) / lenSq : 0;
   t = Math.max(0, Math.min(1, t));
-  const px = x1 + dx * t, py = y1 + dy * t;
-  return (px - cx) * (px - cx) + (py - cy) * (py - cy) < r * r;
+  const px = x1 + dx * t - cx;
+  const py = y1 + dy * t - cy;
+  return px * px + py * py <= r * r;
 }
 
 export function playerShoot(world, aimAngle) {
   const p = world.player;
-  const w = WEAPONS[p.weapon];
-  if (!w || w.speed === 0) return false;
+  const gun = WEAPONS[p.weapon];
+  if (!gun || gun.speed === 0) return false;
   if (p.reloading > 0) return false;
-  if (p.ammo <= 0) { p.reloading = 1.1; return false; }
+  if (p.ammo <= 0) {
+    p.reloading = 1.1;
+    return false;
+  }
   p.ammo -= 1;
   world.stats.shotsFired += 1;
   world.bullets.push({
-    x: p.x + Math.cos(aimAngle) * 14, y: p.y + Math.sin(aimAngle) * 14,
-    vx: Math.cos(aimAngle) * w.speed, vy: Math.sin(aimAngle) * w.speed,
-    life: w.range / w.speed, damage: w.damage, from: 'player', tracer: true,
+    x: p.x + Math.cos(aimAngle) * 14,
+    y: p.y + Math.sin(aimAngle) * 14,
+    vx: Math.cos(aimAngle) * gun.speed,
+    vy: Math.sin(aimAngle) * gun.speed,
+    life: gun.range / gun.speed,
+    damage: gun.damage,
+    from: 'player',
+    tracer: true,
   });
   addHeat(world, 7);
   return true;
@@ -62,18 +77,22 @@ export function playerPunch(world) {
 
 export function startReload(world) {
   const p = world.player;
-  const w = WEAPONS[p.weapon];
-  if (!w || w.speed === 0 || p.reloading > 0) return;
-  if (p.reserve <= 0 || p.ammo >= w.ammo) return;
+  const gun = WEAPONS[p.weapon];
+  if (!gun || gun.speed === 0) return;
+  if (p.reloading > 0) return;
+  if (p.reserve <= 0) return;
+  if (p.ammo >= gun.ammo) return;
   p.reloading = 1.1;
 }
 
 export function finishReload(world) {
   const p = world.player;
-  const w = WEAPONS[p.weapon];
-  const need = w.ammo - p.ammo;
-  const take = Math.min(need, p.reserve);
-  p.ammo += take; p.reserve -= take; p.reloading = 0;
+  const gun = WEAPONS[p.weapon];
+  if (!gun) return;
+  const take = Math.min(gun.ammo - p.ammo, p.reserve);
+  p.ammo += take;
+  p.reserve -= take;
+  p.reloading = 0;
 }
 
 export function hurtGang(world, g, damage) {
@@ -83,6 +102,7 @@ export function hurtGang(world, g, damage) {
     world.stats.money += drop;
     world.stats.score += 30;
     world.pickups.push({ kind: 'cash', x: g.x, y: g.y, taken: true, silent: true });
+    if (!world.events) world.events = [];
     world.events.push('gang-down:' + drop);
   }
 }
@@ -91,89 +111,134 @@ export function hurtPlayer(world, damage) {
   const p = world.player;
   if (p.car) {
     p.car.hp -= damage * 0.55;
-    if (p.car.hp <= 0 && !p.car.wrecked) wreckCar(world, p.car);
+    if (p.car.hp <= 0) wreckCar(world, p.car);
     return;
   }
-  let d = damage;
-  if (p.armour > 0) { const absorbed = Math.min(p.armour, d * 0.7); p.armour -= absorbed; d -= absorbed; }
-  p.hp -= d;
-  if (p.hp <= 0 && !p.dead) { p.dead = true; world.events.push('wasted'); }
+  let remaining = damage;
+  if (p.armour > 0) {
+    const soaked = Math.min(p.armour, remaining * 0.7);
+    p.armour -= soaked;
+    remaining -= soaked;
+  }
+  p.hp -= remaining;
+  if (p.hp <= 0 && !p.dead) {
+    p.dead = true;
+    if (!world.events) world.events = [];
+    world.events.push('wasted');
+  }
 }
 
 export function wreckCar(world, car) {
-  car.wrecked = true; car.hp = 0; car.speed = 0; car.smoke = 1;
-  if (world.player.car === car) { world.player.car = null; }
+  car.wrecked = true;
+  car.hp = 0;
+  car.speed = 0;
+  car.smoke = 1;
+  if (world.player.car === car) world.player.car = null;
 }
 
 export function stepCombat(world, dt) {
-  world.events = world.events || [];
+  if (!world.events) world.events = [];
   const p = world.player;
-  if (p.reloading > 0) { p.reloading -= dt; if (p.reloading <= 0) finishReload(world); }
+
+  if (p.reloading > 0) {
+    p.reloading -= dt;
+    if (p.reloading <= 0) finishReload(world);
+  }
   if (p.punchCool > 0) p.punchCool -= dt;
-  // Bullets: swept collision against gang, cops' cars and the player.
+
+  // --- bullets, swept ---
   for (const b of world.bullets) {
-    const nx = b.x + b.vx * dt, ny = b.y + b.vy * dt;
-    b.life -= dt;
+    const nx = b.x + b.vx * dt;
+    const ny = b.y + b.vy * dt;
     if (b.from === 'player') {
       for (const g of world.gang) {
-        if (g.hp > 0 && segmentHitsCircle(b.x, b.y, nx, ny, g.x, g.y, 13)) { hurtGang(world, g, b.damage); b.life = 0; break; }
-      }
-      if (b.life > 0) for (const cop of world.cops) {
-        if (!cop.wrecked && segmentHitsCircle(b.x, b.y, nx, ny, cop.x, cop.y, 24)) {
-          cop.hp -= b.damage; addHeat(world, 10);
-          if (cop.hp <= 25) wreckCar(world, cop);
-          b.life = 0; break;
+        if (g.hp > 0 && segmentHitsCircle(b.x, b.y, nx, ny, g.x, g.y, 13)) {
+          hurtGang(world, g, b.damage);
+          b.life = 0;
+          break;
         }
       }
-    } else if (!p.car && segmentHitsCircle(b.x, b.y, nx, ny, p.x, p.y, 12)) {
-      hurtPlayer(world, b.damage); b.life = 0;
-    } else if (p.car && segmentHitsCircle(b.x, b.y, nx, ny, p.x, p.y, 26)) {
-      hurtPlayer(world, b.damage); b.life = 0;
+      if (b.life > 0) {
+        for (const cop of world.cops) {
+          if (!cop.wrecked && segmentHitsCircle(b.x, b.y, nx, ny, cop.x, cop.y, 24)) {
+            cop.hp -= b.damage;
+            addHeat(world, 10);
+            if (cop.hp <= 25) wreckCar(world, cop);
+            b.life = 0;
+            break;
+          }
+        }
+      }
+    } else {
+      const radius = p.car ? 26 : 12;
+      if (segmentHitsCircle(b.x, b.y, nx, ny, p.x, p.y, radius)) {
+        hurtPlayer(world, b.damage);
+        b.life = 0;
+      }
     }
-    b.x = nx; b.y = ny;
+    b.x = nx;
+    b.y = ny;
+    b.life -= dt;
   }
   world.bullets = world.bullets.filter((b) => b.life > 0);
-  // Gang behaviour: close in, strafe, fire in bursts.
+
+  // --- gang behaviour: close in and shoot in bursts ---
   for (const g of world.gang) {
     if (g.hp <= 0) continue;
-    const d = dist(g.x, g.y, p.x, p.y);
+    const gap = dist(g.x, g.y, p.x, p.y);
     const want = angleTo(g.x, g.y, p.x, p.y);
     g.angle = want;
-    if (d > 150) {
-      g.x += Math.cos(want) * 96 * dt; g.y += Math.sin(want) * 96 * dt;
+    if (gap > 150) {
+      g.x += Math.cos(want) * 96 * dt;
+      g.y += Math.sin(want) * 96 * dt;
     }
-    g.fireTimer -= dt;
-    if (g.fireTimer <= 0 && d < 330) {
+    g.fireTimer = (g.fireTimer || 0) - dt;
+    if (g.fireTimer <= 0 && gap < 330) {
       g.fireTimer = 1.1 + world.rng() * 1.3;
       g.muzzle = 0.09;
+      const spread = world.rng.range(-0.06, 0.06);
       world.bullets.push({
-        x: g.x + Math.cos(want) * 13, y: g.y + Math.sin(want) * 13,
-        vx: Math.cos(want + world.rng.range(-0.06, 0.06)) * 760,
-        vy: Math.sin(want + world.rng.range(-0.06, 0.06)) * 760,
-        life: 0.5, damage: 7, from: 'gang', tracer: true,
+        x: g.x + Math.cos(want) * 13,
+        y: g.y + Math.sin(want) * 13,
+        vx: Math.cos(want + spread) * 760,
+        vy: Math.sin(want + spread) * 760,
+        life: 0.5,
+        damage: 7,
+        from: 'gang',
+        tracer: true,
       });
     }
     if (g.muzzle > 0) g.muzzle -= dt;
   }
   world.gang = world.gang.filter((g) => g.hp > 0);
-  // Foot cops fire rarely and weakly; their real threat is the bust.
+
+  // --- foot cops: harassing fire, and the bust if they hold you ---
   for (const fc of world.footCops || []) {
-    fc.fireTimer = (fc.fireTimer || 1.6) - dt;
-    if (fc.fireTimer <= 0 && dist(fc.x, fc.y, p.x, p.y) < 300) {
+    fc.fireTimer = (fc.fireTimer === undefined ? 1.6 : fc.fireTimer) - dt;
+    const gap = dist(fc.x, fc.y, p.x, p.y);
+    if (fc.fireTimer <= 0 && gap < 300) {
       fc.fireTimer = 1.9;
       const want = angleTo(fc.x, fc.y, p.x, p.y);
       world.bullets.push({
-        x: fc.x, y: fc.y, vx: Math.cos(want) * 720, vy: Math.sin(want) * 720,
+        x: fc.x, y: fc.y,
+        vx: Math.cos(want) * 720,
+        vy: Math.sin(want) * 720,
         life: 0.45, damage: 5, from: 'cop', tracer: true,
       });
     }
-    // Bust check: a foot cop holding contact on a slow, on-foot player.
-    if (!p.car && Math.abs(p.speed || 0) < 4 && dist(fc.x, fc.y, p.x, p.y) < 30) {
+    if (!p.car && Math.abs(p.speed || 0) < 4 && gap < 30) {
       world.flags.bustTimer = (world.flags.bustTimer || 0) + dt;
-      if (world.flags.bustTimer > 2.2 && !p.dead) { p.dead = true; world.flags.busted = true; world.events.push('busted'); }
-    } else world.flags.bustTimer = 0;
+      if (world.flags.bustTimer > 2.2 && !p.dead) {
+        p.dead = true;
+        world.flags.busted = true;
+        world.events.push('busted');
+      }
+    } else {
+      world.flags.bustTimer = 0;
+    }
   }
-  // Pickups.
+
+  // --- pickups lying in the street ---
   for (const pk of world.pickups) {
     if (pk.taken) continue;
     if (dist(pk.x, pk.y, p.x, p.y) < 26) {

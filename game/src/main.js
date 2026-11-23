@@ -1,50 +1,44 @@
-// Solmar Heat — main.js
-// The game loop and the player's hands: driving, walking, stealing,
-// shooting, missions, side work, shops, save/load and the screens
-// (title / play / pause-map / mod shop / wasted / busted).
-// Screenshot mode (?shot=chase|vault|map|title) stages a scene via
-// shots.js, maps it to a screen state and holds it perfectly still.
+// Solmar Heat — the browser loop. Wires the pure modules together:
+// input, the fixed-step world simulation, combat, missions, side work,
+// saves in localStorage, and the renderer's screens (title, play,
+// pause map, mod shop, victory, end). A ?shot=<name> URL freezes a
+// staged scene for screenshots.
 
 import { VIEW_W, VIEW_H, SAVE_KEY, DAY_LENGTH_SEC, PLAYER_FOOT_SPEED, PLAYER_SPRINT_SPEED, KMH_PER_UNIT } from './config.js';
 import { clamp, dist, angleTo } from './random.js';
 import { createInput, held, tapped } from './input.js';
 import { createAudio } from './audio.js';
 import {
-  createWorld, starsOf, addHeat, stepTraffic, stepPeds, stepPolice,
-  stepWanted, stepCarPhysics, moveEntity, blockedAt, respawnPlayer, makeCar,
+  createWorld, makeCar, stepTraffic, stepPeds, stepPolice, stepWanted,
+  stepCarPhysics, moveEntity, addHeat, respawnPlayer, starsOf,
 } from './world.js';
-import { stepWeather, weatherOf, trafficDensity, skyPhase } from './weather.js';
+import { stepWeather, weatherOf, trafficDensity } from './weather.js';
 import { stepCollectibles } from './collectibles.js';
 import { stepTurf } from './turf.js';
-import { stepMission, missionTarget, startMission, stepPos, MISSIONS } from './missions.js';
+import { stepMission, startMission, stepPos, MISSIONS } from './missions.js';
 import { spawnGang, playerShoot, playerPunch, startReload, stepCombat, WEAPONS } from './combat.js';
 import { startFare, stepFare, startDelivery, stepDelivery } from './sidejobs.js';
-import { startRace, stepRace, RACES } from './races.js';
-import { buyMod, usePaintShop } from './modshop.js';
+import { startRace, stepRace } from './races.js';
+import { buyMod, usePaintShop, applyMods } from './modshop.js';
 import { landmarkById, LANDMARKS } from './landmarks.js';
-import { drawWorld, drawHUD, drawMapScreen, drawTitle, drawModShop, drawEndScreen } from './render.js';
+import { drawWorld, drawHUD, drawMapScreen, drawTitle, drawModShop, drawEndScreen, drawVictoryScreen } from './render.js';
 import { stageShot } from './shots.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-canvas.width = VIEW_W; canvas.height = VIEW_H;
 const input = createInput(canvas);
 const audio = createAudio();
-
-const params = new URLSearchParams(location.search);
-const shotName = params.get('shot');
 
 let world = createWorld();
 let gameState = 'title';
 let cam = { x: world.player.x, y: world.player.y, zoom: 1 };
-let lastTs = 0;
-let fireCool = 0;
-let dialogueSeq = 0;
+let flashTimer = 0;
+let shotMode = false;
 
 const DIALOGUES = [
-  { who: 'Mama Lou', role: 'Fixer', line: 'Solmar pays the bold, Rex. Keep it that way.' },
-  { who: 'Lena Voss', role: 'Crew', line: 'I mapped the cameras. You just drive.' },
-  { who: 'Kane', role: 'Boss', line: 'Everyone in this city owes me. Soon you will not.' },
+  { who: 'Mama Lou', role: 'Fixer', line: 'Rex. Wheels first, questions later. Lou\u2019s, now.' },
+  { who: 'Lena Voss', role: 'Crew', line: 'You drive, I count. Nobody bleeds on the upholstery.' },
+  { who: 'Kane', role: 'Boss', line: 'The bank job is the last one. Make it sing.' },
 ];
 
 function say(idx) {
@@ -54,50 +48,81 @@ function say(idx) {
 
 function flash(text, secs) {
   world.flash = { text, until: world.time + (secs || 2.2) };
+  flashTimer = secs || 2.2;
 }
 
-// ------------------------------------------------------------ save / load ---
+// ------------------------------------------------------------ save / load
 
 export function saveGame() {
-  const s = world.stats;
-  const data = {
-    stats: s, mods: world.mods,
-    coins: world.collectibles.coins.map((c) => c.taken),
-    stashes: world.collectibles.stashes.map((c) => c.taken),
-    jumps: world.collectibles.jumps.map((j) => j.done),
-    turf: world.turf.zones.map((z) => z.owner),
-    flags: world.flags,
-    px: world.player.x, py: world.player.y,
-  };
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) { /* private mode */ }
-  return data;
+  try {
+    const data = {
+      stats: world.stats,
+      flags: world.flags,
+      mods: world.mods,
+      coins: world.collectibles.coins.map((c) => c.taken),
+      stashes: world.collectibles.stashes.map((c) => c.taken),
+      jumps: world.collectibles.jumps.map((j) => j.done),
+      turfOwners: world.turf.zones.map((z) => z.owner),
+      player: { x: world.player.x, y: world.player.y, hp: world.player.hp, armour: world.player.armour },
+      radioIdx: world.radioIdx,
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 export function loadGame() {
-  let raw = null;
-  try { raw = localStorage.getItem(SAVE_KEY); } catch (e) { raw = null; }
-  if (!raw) return false;
-  let data;
-  try { data = JSON.parse(raw); } catch (e) { return false; }
-  Object.assign(world.stats, data.stats || {});
-  Object.assign(world.mods, data.mods || {});
-  (data.coins || []).forEach((t, i) => { if (world.collectibles.coins[i]) world.collectibles.coins[i].taken = !!t; });
-  (data.stashes || []).forEach((t, i) => { if (world.collectibles.stashes[i]) world.collectibles.stashes[i].taken = !!t; });
-  (data.jumps || []).forEach((t, i) => { if (world.collectibles.jumps[i]) world.collectibles.jumps[i].done = !!t; });
-  (data.turf || []).forEach((o, i) => { if (world.turf.zones[i]) world.turf.zones[i].owner = o; });
-  Object.assign(world.flags, data.flags || {});
-  if (data.px) { world.player.x = data.px; world.player.y = data.py; }
-  return true;
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    const fresh = createWorld();
+    fresh.stats = Object.assign(fresh.stats, data.stats || {});
+    fresh.flags = data.flags || {};
+    fresh.mods = Object.assign(fresh.mods, data.mods || {});
+    (data.coins || []).forEach((taken, i) => { if (fresh.collectibles.coins[i]) fresh.collectibles.coins[i].taken = !!taken; });
+    (data.stashes || []).forEach((taken, i) => { if (fresh.collectibles.stashes[i]) fresh.collectibles.stashes[i].taken = !!taken; });
+    (data.jumps || []).forEach((done, i) => { if (fresh.collectibles.jumps[i]) fresh.collectibles.jumps[i].done = !!done; });
+    (data.turfOwners || []).forEach((owner, i) => { if (fresh.turf.zones[i]) fresh.turf.zones[i].owner = owner; });
+    if (data.player) {
+      fresh.player.x = data.player.x;
+      fresh.player.y = data.player.y;
+      fresh.player.hp = data.player.hp;
+      fresh.player.armour = data.player.armour || 0;
+    }
+    fresh.radioIdx = data.radioIdx || 0;
+    world = fresh;
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
-// ------------------------------------------------------------- interaction ---
+function saveInfo() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return { exists: false };
+    const data = JSON.parse(raw);
+    return { exists: true, missionsDone: data.stats ? data.stats.missionsDone : 0, money: data.stats ? data.stats.money : 0 };
+  } catch (err) {
+    return { exists: false };
+  }
+}
+
+// ---------------------------------------------------------------- helpers
 
 function nearestCar(maxD) {
-  let best = null, bestD = maxD;
+  let best = null;
+  let bestD = maxD;
   for (const car of world.cars) {
-    if (car.police) continue;
+    if (car.wrecked) continue;
     const d = dist(world.player.x, world.player.y, car.x, car.y);
-    if (d < bestD) { best = car; bestD = d; }
+    if (d < bestD) {
+      bestD = d;
+      best = car;
+    }
   }
   return best;
 }
@@ -105,309 +130,354 @@ function nearestCar(maxD) {
 function enterExitCar() {
   const p = world.player;
   if (p.car) {
-    const side = p.car.angle + Math.PI / 2;
-    p.x = p.car.x + Math.cos(side) * 30;
-    p.y = p.car.y + Math.sin(side) * 30;
+    const car = p.car;
     p.car = null;
+    car.driver = null;
+    p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 30;
+    p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 30;
     return;
   }
-  const car = nearestCar(46);
-  if (!car) return;
-  if (car.wrecked) { flash('TOTALED — THIS CAR IS DONE'); return; }
-  p.car = car;
-  car.parked = false;
-  if (!car.ai) car.ai = {};
-  car.ai.traffic = false;
-  world.stats.carsStolen += 1;
-  world.stats.rp += 4;
-  if (!car.wasCounted) { car.wasCounted = true; }
-  addHeat(world, 26);
-  audio.crash();
+  const car = nearestCar(62);
+  if (car) {
+    p.car = car;
+    car.driver = 'player';
+    p.x = car.x;
+    p.y = car.y;
+    if (!car.parked && !car.police) {
+      // A running car with a driver-shaped hole in its day: it's theft.
+    } else if (car.id !== world.playerCarId) {
+      world.stats.carsStolen += 1;
+      addHeat(world, 26);
+      flash('CAR TAKEN', 1.4);
+    }
+    car.parked = false;
+  }
 }
 
 function nearLandmark(id, range) {
   const lm = landmarkById(id);
-  return lm && dist(world.player.x, world.player.y, lm.x, lm.y) < range;
+  if (!lm) return false;
+  return dist(world.player.x, world.player.y, lm.x, lm.y) < range;
 }
 
-// ------------------------------------------------------------------- loop ---
+// ------------------------------------------------------------------- step
 
 function step(dt) {
   world.time += dt;
   world.stats.playTime += dt;
-  const p = world.player;
   stepWeather(world.weather, dt, world.rng, DAY_LENGTH_SEC);
-  world.weather.phase = skyPhase(world.weather.clock);
   world.trafficDensity = trafficDensity(world.weather.clock);
-
-  // Radio auto-cycle while driving.
-  if (p.car) {
-    world.radioTimer -= dt;
-    if (world.radioTimer <= 0) { world.radioTimer = 24; world.radioIdx = (world.radioIdx + 1) % 3; }
-  }
 
   stepPlayer(dt);
   stepTraffic(world, dt);
   stepPeds(world, dt);
-  if (starsOf(world) > 0 || world.cops.length) stepPolice(world, dt);
-  stepWanted(world, dt);
-  if (!world.sighted && starsOf(world) > 0) world.flags.hideTime = (world.flags.hideTime || 0) + dt;
-  else world.flags.hideTime = 0;
 
-  for (const ev of stepMission(world, dt)) handleEvent(ev);
-  // Keep the vault ring's bright arc glued to the live hold progress.
-  if (world.mission && world.flags.vaultRing) {
-    world.flags.vaultRing.pct = world.mission.vaultPct;
-    if (world.mission.step !== 1) world.flags.vaultRing = null;
-  }
-  for (const ev of stepCollectibles(world, dt)) handleEvent(ev);
   for (const ev of stepTurf(world, dt)) handleEvent(ev);
+
+  const missionEvents = stepMission(world, dt);
+  for (const ev of missionEvents) handleEvent(ev);
+
+  for (const ev of stepCollectibles(world, dt)) handleEvent(ev);
   for (const ev of stepFare(world, dt)) handleEvent(ev);
   for (const ev of stepDelivery(world, dt)) handleEvent(ev);
   for (const ev of stepRace(world, dt)) handleEvent(ev);
+
   stepCombat(world, dt);
-  for (const ev of world.events || []) handleEvent(ev);
-  world.events = [];
+  stepPolice(world, dt);
+  stepWanted(world, dt);
 
-  // Pickups of opportunity: paint shop & mod shop proximity prompts.
-  world.flags.target = missionTarget(world)
-    || (world.race ? { x: world.race.def.points[world.race.idx][0], y: world.race.def.points[world.race.idx][1] } : null)
-    || (world.fare ? (world.fare.phase === 'pickup' ? { x: world.fare.x, y: world.fare.y } : { x: world.fare.dx, y: world.fare.dy }) : null)
-    || (world.delivery ? (world.delivery.phase === 'pickup' ? { x: world.delivery.x, y: world.delivery.y } : { x: world.delivery.dx, y: world.delivery.dy }) : null);
+  // Radio: Q cycles, and the dial drifts on its own while driving.
+  world.radioTimer -= dt;
+  if (world.radioTimer <= 0) {
+    world.radioTimer = 24;
+    if (world.player.car) world.radioIdx = (world.radioIdx + 1) % 3;
+  }
 
-  // Camera follows, easing toward the player.
-  const tx = p.car ? p.car.x : p.x, ty = p.car ? p.car.y : p.y;
-  cam.x += (tx - cam.x) * Math.min(1, dt * 5);
-  cam.y += (ty - cam.y) * Math.min(1, dt * 5);
-  cam.zoom += ((p.car ? 1.0 : 1.12) - cam.zoom) * Math.min(1, dt * 2);
+  if (world.player.dead && gameState === 'play') {
+    gameState = 'end';
+    saveGame();
+  }
+  if (world.flags.storyComplete && !world.mission && gameState === 'play' && world.flags.justFinished) {
+    world.flags.justFinished = false;
+    gameState = 'victory';
+    audio.levelup();
+    saveGame();
+  }
 
-  if (world.stats.playTime > 0 && Math.floor(world.stats.playTime) % 20 === 0) saveGame();
+  // Camera follows the player (or the car).
+  const focus = world.player;
+  cam.x += (focus.x - cam.x) * Math.min(1, dt * 6);
+  cam.y += (focus.y - cam.y) * Math.min(1, dt * 6);
+  cam.zoom = world.flags.overShoulder ? 1.55 : 1;
+  cam.persp = !!world.flags.perspCam && !!world.player.car;
 }
 
 function stepPlayer(dt) {
   const p = world.player;
-  if (p.dead) return;
-  if (tapped(input, 'KeyM')) audio.toggleMute();
-  if (tapped(input, 'KeyE')) enterExitCar();
-  if (tapped(input, 'KeyR')) startReload(world);
-  if (tapped(input, 'KeyF')) { if (playerPunch(world)) audio.punch(); }
-  if (tapped(input, 'Digit1')) p.weapon = 0;
-  if (tapped(input, 'Digit2')) p.weapon = 1;
-  if (tapped(input, 'Digit3')) p.weapon = 2;
-  if (tapped(input, 'KeyQ')) world.radioIdx = (world.radioIdx + 1) % 3;
-  if (tapped(input, 'KeyT')) { if (startFare(world)) flash('TAXI FARE — PICK UP THE PASSENGER'); }
-  if (tapped(input, 'KeyB')) { if (startDelivery(world)) flash('DELIVERY — COLLECT AT THE MARINA'); }
-  if (tapped(input, 'KeyJ')) {
-    for (const race of RACES) {
-      if (dist(p.x, p.y, race.start.x, race.start.y) < 120 && startRace(world, race.id)) flash('RACE — ' + race.name.toUpperCase());
-    }
-  }
-  if (tapped(input, 'KeyN')) {
-    const idx = world.stats.missionsDone;
-    if (idx < MISSIONS.length && !world.mission) {
-      startMission(world, idx);
-      say(idx);
-      flash('MISSION — ' + MISSIONS[idx].title.toUpperCase());
-    }
-  }
-  if (tapped(input, 'KeyG')) {
-    if (nearLandmark('paint', 130)) {
-      const res = usePaintShop(world);
-      flash(res.ok ? 'PAINT SHOP — HEAT CLEARED, CAR REPAIRED' : 'PAINT SHOP NEEDS $120');
-    }
-  }
-  // Crew ability: Lena's getaway route (clears a chunk of heat, cooldown).
-  if (tapped(input, 'KeyC')) {
-    if (world.time - (world.flags.crewUsedAt || -99) > 45 && starsOf(world) > 0) {
-      world.flags.crewUsedAt = world.time;
-      world.heat = Math.max(0, world.heat - 130);
-      flash('LENA FOUND A WAY OUT — HEAT DROPPED');
-    }
-  }
+  const up = held(input, 'KeyW', 'ArrowUp');
+  const down = held(input, 'KeyS', 'ArrowDown');
+  const left = held(input, 'KeyA', 'ArrowLeft');
+  const right = held(input, 'KeyD', 'ArrowRight');
 
-  const gripMul = weatherOf(world.weather).grip;
   if (p.car) {
     const car = p.car;
-    const mods = { topSpeed: car.topSpeed * (1 + world.mods.engine * 0.09), grip: car.grip * (1 + world.mods.tires * 0.08) };
-    const savedTop = car.topSpeed, savedGrip = car.grip;
-    car.topSpeed = mods.topSpeed; car.grip = mods.grip;
-    const throttle = held(input, 'KeyW', 'ArrowUp') ? 1 : held(input, 'KeyS', 'ArrowDown') ? -0.7 : 0;
-    const steer = (held(input, 'KeyA', 'ArrowLeft') ? -1 : 0) + (held(input, 'KeyD', 'ArrowRight') ? 1 : 0);
-    const handbrake = held(input, 'Space');
-    if (handbrake) car.speed -= car.speed * 2.4 * dt;
-    const before = { x: car.x, y: car.y, speed: car.speed };
-    const move = stepCarPhysics(car, throttle, steer * (handbrake ? 1.7 : 1), dt, gripMul);
-    world.flags.sliding = handbrake && Math.abs(car.speed) > 120;
-    const nx = car.x + move.dx, ny = car.y + move.dy;
-    if (!blockedAt(world, nx, ny, true)) {
-      car.x = nx; car.y = ny;
-    } else {
-      // Wall hit: damage, worse at speed; armor mods soften it.
-      const impact = Math.abs(car.speed);
-      if (impact > 90) {
-        car.hp -= 8 * (1 - world.mods.armor * 0.18);
-        audio.crash();
-        if (car.hp <= 0) { car.wrecked = true; car.hp = 0; p.car = null; flash('CAR TOTALED'); }
-      }
-      car.speed *= -0.25;
+    const eff = applyMods(car, world.mods);
+    const throttle = up ? 1 : down ? -0.7 : 0;
+    const steer = (left ? -1 : 0) + (right ? 1 : 0);
+    const before = car.speed;
+    const move = stepCarPhysics(
+      { ...car, topSpeed: eff.topSpeed, grip: eff.grip },
+      throttle, steer, dt, weatherOf(world.weather).grip,
+    );
+    // Apply physics back onto the real car, capped by the modded top.
+    car.speed = clamp(car.speed + throttle * car.accel * dt, -eff.topSpeed * 0.38, eff.topSpeed);
+    car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 27 * dt);
+    if (throttle === 0) car.speed -= car.speed * 0.35 * dt;
+    car.angle += steer * eff.grip * clamp(Math.abs(car.speed) / 160, 0, 1) * dt * (car.speed < 0 ? -1 : 1) * weatherOf(world.weather).grip;
+    void move;
+    void before;
+    const nx = car.x + Math.cos(car.angle) * car.speed * dt;
+    const ny = car.y + Math.sin(car.angle) * car.speed * dt;
+    const ox = car.x;
+    const oy = car.y;
+    moveEntity(world, car, nx, ny, true);
+    if (car.x === ox && car.y === oy && Math.abs(car.speed) > 120) {
+      car.speed *= 0.4;
+      audio.crash();
     }
-    car.topSpeed = savedTop; car.grip = savedGrip;
-    p.x = car.x; p.y = car.y; p.angle = car.angle;
-    const moved = dist(before.x, before.y, car.x, car.y);
-    world.stats.kmDriven += moved / 1000;
-    // Near-miss: threading past traffic at speed.
-    car.nearMissCool -= dt;
-    if (Math.abs(car.speed) > 150 && car.nearMissCool <= 0) {
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = car.angle;
+    p.speed = car.speed;
+    world.stats.kmDriven += Math.abs(car.speed) * dt * 0.004;
+    // Near misses against traffic.
+    if (Math.abs(car.speed) > 200) {
       for (const other of world.cars) {
-        if (other === car || other.police || other.parked) continue;
+        if (other === car || other.parked) continue;
         const d = dist(car.x, car.y, other.x, other.y);
-        if (d > 34 && d < 62) {
+        if (d > 34 && d < 62 && (other.nearMissCool || 0) <= 0) {
+          other.nearMissCool = 3;
           world.stats.nearMisses += 1;
-          world.stats.money += 15; world.stats.score += 10;
-          car.nearMissCool = 1.5;
+          world.stats.rp += 3;
           audio.whoosh();
-          flash('NEAR MISS +$15', 1.1);
-          break;
         }
       }
     }
-    // Ramming a cop at speed is a crime with witnesses.
-    for (const cop of world.cops) {
-      if (!cop.wrecked && dist(car.x, car.y, cop.x, cop.y) < 30 && Math.abs(car.speed) > 120) {
-        cop.hp -= 30; addHeat(world, 16); car.speed *= 0.6;
-        if (cop.hp <= 25) { cop.wrecked = true; cop.hp = 0; }
-      }
-    }
+    for (const other of world.cars) if (other.nearMissCool > 0) other.nearMissCool -= dt;
   } else {
     const sprint = held(input, 'ShiftLeft', 'ShiftRight');
-    const sp = sprint ? PLAYER_SPRINT_SPEED : PLAYER_FOOT_SPEED;
-    let mx = 0, my = 0;
-    if (held(input, 'KeyW', 'ArrowUp')) my -= 1;
-    if (held(input, 'KeyS', 'ArrowDown')) my += 1;
-    if (held(input, 'KeyA', 'ArrowLeft')) mx -= 1;
-    if (held(input, 'KeyD', 'ArrowRight')) mx += 1;
-    const len = Math.sqrt(mx * mx + my * my) || 1;
-    p.speed = (mx || my) ? sp : 0;
-    if (mx || my) p.angle = Math.atan2(my, mx);
-    moveEntity(world, p, p.x + (mx / len) * sp * dt, p.y + (my / len) * sp * dt, false);
-    // Aim with the mouse; click to shoot.
-    const aim = Math.atan2(input.mouseY - VIEW_H / 2, input.mouseX - VIEW_W / 2);
-    p.angle = (mx || my) ? p.angle : aim;
-    fireCool -= dt;
-    if (input.mouseDown && fireCool <= 0 && p.weapon > 0) {
-      if (playerShoot(world, aim)) { fireCool = WEAPONS[p.weapon].rate; audio.shot(); }
+    const speed = sprint ? PLAYER_SPRINT_SPEED : PLAYER_FOOT_SPEED;
+    let mx = (right ? 1 : 0) - (left ? 1 : 0);
+    let my = (down ? 1 : 0) - (up ? 1 : 0);
+    if (mx !== 0 && my !== 0) {
+      mx *= 0.7071;
+      my *= 0.7071;
+    }
+    p.speed = (mx !== 0 || my !== 0) ? speed : 0;
+    if (p.speed > 0) {
+      p.angle = Math.atan2(my, mx);
+      moveEntity(world, p, p.x + mx * speed * dt, p.y + my * speed * dt, false);
     }
   }
+
+  // Combat inputs.
+  const aim = Math.atan2(
+    (input.mouseY - VIEW_H / 2) / (cam.zoom || 1) + cam.y - p.y,
+    (input.mouseX - VIEW_W / 2) / (cam.zoom || 1) + cam.x - p.x,
+  );
+  if (!p.car && (input.mouseDown || held(input, 'Space'))) {
+    if (WEAPONS[p.weapon].speed > 0) {
+      if (playerShoot(world, aim)) audio.shot();
+    }
+  }
+  if (!p.car && tapped(input, 'KeyF')) {
+    if (playerPunch(world)) audio.punch();
+  }
+  if (tapped(input, 'KeyR')) startReload(world);
+  for (let i = 0; i < 3; i++) {
+    if (tapped(input, 'Digit' + (i + 1))) p.weapon = i;
+  }
+  if (tapped(input, 'KeyQ')) world.radioIdx = (world.radioIdx + 1) % 3;
 }
 
 function handleEvent(ev) {
-  if (ev === 'coin') { audio.coin(); flash('SOLMAR COIN +$75', 1.2); }
-  else if (ev === 'stash') { audio.cash(); flash('LANTERN STASH +$120', 1.2); }
-  else if (ev === 'jump') { audio.levelup(); flash('STUNT JUMP +$90', 1.4); }
-  else if (ev.startsWith('spawn-gang:')) {
+  if (typeof ev !== 'string') return;
+  if (ev.startsWith('spawn-gang:')) {
+    const count = parseInt(ev.split(':')[1], 10) || 5;
     const m = world.mission;
-    const stepDef = m && m.def.steps[m.step];
-    const at = m ? stepPos(m, m.step) : { x: world.player.x, y: world.player.y };
-    spawnGang(world, parseInt(ev.split(':')[1], 10) || 5, at.x, at.y, stepDef && stepDef.vault ? 80 : 110);
-    if (stepDef && stepDef.vault) world.flags.vaultRing = { x: at.x, y: at.y + 8, pct: 0 };
-  }
-  else if (ev.startsWith('mission-done:')) {
-    audio.levelup();
-    flash('MISSION PASSED — GRADE ' + ev.split(':')[1]);
-    dialogueSeq += 1; say(dialogueSeq);
-    if (world.mission === null) world.flags.vaultRing = null;
-    saveGame();
-  }
-  else if (ev === 'mission-failed') flash('MISSION FAILED — TRY AGAIN (N)');
-  else if (ev === 'turf-spawn') {
+    if (m) {
+      const pos = stepPos(m, m.step);
+      spawnGang(world, count, pos.x, pos.y, 110);
+    }
+    flash('VIPERS INBOUND', 1.8);
+  } else if (ev === 'turf-spawn') {
     const zone = world.turf.zones.find((z) => z.id === world.turf.activeZone);
-    if (zone) spawnGang(world, 2, zone.x + world.rng.range(-160, 160), zone.y + world.rng.range(-160, 160), 60);
-  }
-  else if (ev === 'turf-flipped') { audio.levelup(); flash('TURF TAKEN +$200'); }
-  else if (ev === 'turf-all') flash('ALL TURF HELD — SOLMAR IS YOURS');
-  else if (ev.startsWith('fare-done:')) { audio.cash(); flash('FARE PAID +$' + ev.split(':')[1]); }
-  else if (ev === 'fare-pickup') flash('PASSENGER IN — DRIVE!');
-  else if (ev === 'fare-failed') flash('FARE LOST');
-  else if (ev.startsWith('delivery-done:')) { audio.cash(); flash('DELIVERED +$' + ev.split(':')[1]); }
-  else if (ev === 'delivery-pickup') flash('PACKAGE ABOARD — THE CLOCK IS RUNNING');
-  else if (ev === 'delivery-failed') flash('DELIVERY SPOILED');
-  else if (ev === 'race-checkpoint') audio.coin();
-  else if (ev.startsWith('race-won:')) { audio.levelup(); flash('RACE WON +$' + ev.split(':')[1]); }
-  else if (ev === 'race-failed') flash('OUT OF TIME — RACE RESET');
-  else if (ev.startsWith('gang-down:')) audio.cash();
-  else if (ev === 'wasted' || ev === 'busted') {
-    gameState = ev;
-    setTimeout(() => { respawnPlayer(world); gameState = 'play'; }, 2600);
+    if (zone) spawnGang(world, 2, zone.x, zone.y, 150);
+  } else if (ev === 'coin') {
+    flash('COIN +$75', 1.1);
+    audio.coin();
+  } else if (ev === 'stash') {
+    flash('STASH +$120', 1.4);
+    audio.cash();
+  } else if (ev === 'jump') {
+    flash('STUNT JUMP!', 1.6);
+    audio.levelup();
+  } else if (ev === 'pickup') {
+    flash('PACKAGE SECURED', 1.6);
+  } else if (ev === 'step') {
+    audio.cash();
+  } else if (ev.startsWith('mission-done:')) {
+    flash('JOB DONE — ' + ev.split(':')[1] + ' GRADE', 2.6);
+    audio.levelup();
+    say(world.stats.missionsDone % DIALOGUES.length);
+    if (world.flags.storyComplete) world.flags.justFinished = true;
+    saveGame();
+  } else if (ev === 'mission-failed') {
+    flash('JOB FAILED', 2.2);
+  } else if (ev === 'story-complete') {
+    flash('STORY COMPLETE', 3);
+  } else if (ev.startsWith('fare-done:')) {
+    flash('FARE +$' + ev.split(':')[1], 1.8);
+    audio.cash();
+  } else if (ev.startsWith('delivery-done:')) {
+    flash('DELIVERED +$' + ev.split(':')[1], 1.8);
+    audio.cash();
+  } else if (ev === 'race-checkpoint') {
+    audio.coin();
+  } else if (ev.startsWith('race-won:')) {
+    flash('RACE WON +$' + ev.split(':')[1], 2.4);
+    audio.levelup();
+    saveGame();
+  } else if (ev === 'turf-flipped') {
+    flash('TURF TAKEN', 2);
+    audio.levelup();
+    saveGame();
+  } else if (ev.startsWith('gang-down:')) {
+    audio.cash();
   }
 }
 
+// ------------------------------------------------------------------- draw
+
 function draw() {
   if (gameState === 'title') {
-    drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
-    drawTitle(ctx, world, VIEW_W, VIEW_H);
+    const titleCam = { x: 3140, y: 690, zoom: 1.02 };
+    drawWorld(ctx, world, titleCam, VIEW_W, VIEW_H);
+    drawTitle(ctx, world, VIEW_W, VIEW_H, saveInfo().exists ? loadPeek() : null);
   } else if (gameState === 'pause') {
     drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
-    drawMapScreen(ctx, world, VIEW_W, VIEW_H);
+    drawMapScreen(ctx, world, VIEW_W, VIEW_H, saveInfo());
   } else if (gameState === 'modshop') {
     drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
     drawModShop(ctx, world, VIEW_W, VIEW_H);
-  } else if (gameState === 'wasted' || gameState === 'busted') {
+  } else if (gameState === 'victory') {
     drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
-    drawHUD(ctx, world, VIEW_W, VIEW_H);
-    drawEndScreen(ctx, world, VIEW_W, VIEW_H, gameState === 'busted');
+    drawVictoryScreen(ctx, world, VIEW_W, VIEW_H);
+  } else if (gameState === 'end') {
+    drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
+    drawEndScreen(ctx, world, VIEW_W, VIEW_H, !!world.flags.busted);
   } else {
     drawWorld(ctx, world, cam, VIEW_W, VIEW_H);
     drawHUD(ctx, world, VIEW_W, VIEW_H);
   }
 }
 
-function frame(ts) {
-  const dt = Math.min(0.05, (ts - lastTs) / 1000 || 0.016);
-  lastTs = ts;
-  if (shotName) { draw(); return; } // staged scenes hold perfectly still
-  if (gameState === 'title') {
-    world.time += dt;
-    stepWeather(world.weather, dt, world.rng, DAY_LENGTH_SEC);
-    if (input.clicked || tapped(input, 'Enter')) {
-      audio.unlock();
-      loadGame();
-      gameState = 'play';
-      flash('SOLMAR HEAT — PRESS N FOR WORK', 2.6);
-    }
-    cam.x += (world.player.x + 230 - cam.x) * Math.min(1, dt);
-    cam.y += (world.player.y - cam.y) * Math.min(1, dt);
-  } else if (gameState === 'pause') {
-    if (tapped(input, 'KeyP', 'Escape')) gameState = 'play';
-  } else if (gameState === 'modshop') {
-    if (tapped(input, 'Escape')) gameState = 'play';
-    if (tapped(input, 'Digit1')) buyMod(world, 'engine');
-    if (tapped(input, 'Digit2')) buyMod(world, 'armor');
-    if (tapped(input, 'Digit3')) buyMod(world, 'tires');
-  } else if (gameState === 'play') {
-    if (tapped(input, 'KeyP', 'Escape')) gameState = 'pause';
-    else if (tapped(input, 'KeyO') && nearLandmark('modshop', 140)) gameState = 'modshop';
-    else step(dt);
+function loadPeek() {
+  try {
+    const data = JSON.parse(localStorage.getItem(SAVE_KEY));
+    return data && data.stats ? data.stats : null;
+  } catch (err) {
+    return null;
   }
-  input.clicked = false;
-  input.pressed.clear();
+}
+
+// ------------------------------------------------------------------ frame
+
+let lastTs = 0;
+function frame(ts) {
+  const dt = Math.min(0.05, lastTs ? (ts - lastTs) / 1000 : 0.016);
+  lastTs = ts;
+
+  if (!shotMode) {
+    if (gameState === 'play') {
+      step(dt);
+      if (tapped(input, 'KeyP', 'Escape')) gameState = 'pause';
+      else if (tapped(input, 'KeyE')) {
+        if (nearLandmark('modshop', 130) && !world.player.car) gameState = 'modshop';
+        else if (nearLandmark('paint', 130) && world.player.car) {
+          const res = usePaintShop(world);
+          flash(res.ok ? 'RESPRAYED — HEAT WIPED' : 'PAINT NEEDS $120', 2);
+          if (res.ok) audio.cash();
+        } else enterExitCar();
+      } else if (tapped(input, 'KeyN')) {
+        const nextIdx = MISSIONS.findIndex((def) => !world.flags['done_' + def.id]);
+        if (nextIdx >= 0 && !world.mission) {
+          startMission(world, nextIdx);
+          say(nextIdx);
+          flash('NEW JOB: ' + MISSIONS[nextIdx].title.toUpperCase(), 2.2);
+        }
+      } else if (tapped(input, 'KeyT')) {
+        if (!world.fare) { startFare(world); flash('FARE CALLED', 1.6); }
+      } else if (tapped(input, 'KeyG')) {
+        if (!world.delivery) { startDelivery(world); flash('DELIVERY JOB', 1.6); }
+      }
+    } else if (gameState === 'title') {
+      world.time += dt;
+      if (tapped(input, 'Enter')) {
+        audio.unlock();
+        gameState = 'play';
+        cam = { x: world.player.x, y: world.player.y, zoom: 1 };
+        say(0);
+      }
+    } else if (gameState === 'pause') {
+      if (tapped(input, 'KeyP', 'Escape')) gameState = 'play';
+    } else if (gameState === 'modshop') {
+      const tracks = ['engine', 'armor', 'tires'];
+      for (let i = 0; i < 3; i++) {
+        if (tapped(input, 'Digit' + (i + 1))) {
+          const res = buyMod(world, tracks[i]);
+          flash(res.ok ? 'MOD FITTED' : 'CANNOT BUY THAT', 1.6);
+          if (res.ok) audio.cash();
+        }
+      }
+      if (tapped(input, 'KeyE', 'Escape')) gameState = 'play';
+    } else if (gameState === 'victory') {
+      if (tapped(input, 'Enter')) gameState = 'play';
+    } else if (gameState === 'end') {
+      if (tapped(input, 'Enter')) {
+        respawnPlayer(world);
+        world.flags.busted = false;
+        gameState = 'play';
+      }
+    }
+  }
+
   draw();
+  input.pressed.clear();
+  input.clicked = false;
   requestAnimationFrame(frame);
 }
 
-// Screenshot mode: stage the scene, map it to its screen state, and let
-// the coordinator's camera take the picture.
+// ------------------------------------------------------------- shot mode
+
+const params = new URLSearchParams(window.location.search);
+const shotName = params.get('shot');
 if (shotName) {
+  shotMode = true;
   const staged = stageShot(shotName);
   world = staged.world;
   cam = staged.cam;
   gameState = staged.state;
-  if (shotName === 'vault' && world.mission) world.flags.vaultRing = { x: 1800, y: 1808, pct: world.mission.vaultPct };
+  world.time = 3.2;
   draw();
-} else {
-  loadGame();
-  requestAnimationFrame(frame);
 }
 
-// Small handles for the headless play-test (harmless in normal play).
-window.__solmar = { get world() { return world; }, get state() { return gameState; }, startMission, LANDMARKS, makeCar };
-void angleTo; void clamp; void landmarkById;
+window.__solmar = {
+  get world() { return world; },
+  get state() { return gameState; },
+  startMission,
+  LANDMARKS,
+  makeCar,
+};
+
+requestAnimationFrame(frame);

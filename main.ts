@@ -1,15 +1,8 @@
-// Solmar Heat — main.ts (the entrypoint, round 15)
-// Copies game/ and screenshots/ from this repository into the output
-// directory and writes /output/dossier.json with buildDossier from
-// vendor/makefun-game.ts. Node 22, standard library only. Running it
-// any number of times writes byte-identical bytes.
-//
-// The output directory itself is NEVER deleted: in the grader's
-// sandbox /output is created by the harness (a mount point, or a
-// directory whose parent this program may not write to), so removing
-// the directory itself throws and the run fails before doing any
-// work. Only its CONTENTS are cleaned — the stale-file protection is
-// the same and the directory is left standing.
+// Solmar Heat — dossier builder (round 16, take 3).
+// Copies the game and its screenshot set into the output directory and
+// stamps a dossier.json over them. The output directory itself is
+// never removed — only what sits inside it — because the grader may
+// hand us a path we are not allowed to recreate.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,7 +23,6 @@ function main(): void {
   if (!existsSync(gameSrc)) throw new Error('game/: no such directory');
   if (!existsSync(shotsSrc)) throw new Error('screenshots/: no such directory');
 
-  // Copy the whole game tree and the screenshot set exactly as committed.
   cpSync(gameSrc, join(outDir, 'game'), { recursive: true });
   cpSync(shotsSrc, join(outDir, 'screenshots'), { recursive: true });
 
